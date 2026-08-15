@@ -109,6 +109,9 @@ graph LR
 **Requires:** Docker, `kind`, `kubectl`, `kustomize`, `helm`, `terraform`,
 `ansible-core`, Python 3.11+.
 
+Step-by-step instructions, including installing all of the above and what to do
+when a stage fails, are in **[QUICKSTART.md](QUICKSTART.md)**. The short version:
+
 ```bash
 make up                  # everything, locally, no cloud account
 make prove ENV=dev       # deploy and prove it dropped nothing

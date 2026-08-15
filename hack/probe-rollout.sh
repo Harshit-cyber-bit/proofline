@@ -51,10 +51,27 @@ if [ -n "${DURATION}" ]; then
     --duration "${DURATION}" \
     --interval 0.1 \
     --report "${REPORT}"
-else
-  python3 "${REPO_ROOT}/prober/prober.py" \
-    --url "http://127.0.0.1:${PORT}/api/work" \
-    --interval 0.2 \
-    --until-command "kubectl --context ${CONTEXT} rollout status deployment/proofline -n ${NAMESPACE} --timeout=300s" \
-    --report "${REPORT}"
+  exit $?
 fi
+
+# Trigger the rollout from *inside* the probe window rather than before it.
+#
+# Doing it beforehand loses the race that matters: by the time the prober has a
+# port-forward and its first request away, the pods may already have cycled, and
+# the run reports a clean rollout it never actually watched. Re-applying an
+# unchanged manifest has the same problem from the other direction -- nothing
+# rolls, `rollout status` returns instantly, and the probe proves nothing.
+#
+# ROLLOUT_RESTART=1 (the default) forces a genuine rolling update as the first
+# thing the probe window sees.
+if [ "${ROLLOUT_RESTART:-1}" = "1" ]; then
+  TRIGGER="kubectl --context ${CONTEXT} rollout restart deployment/proofline -n ${NAMESPACE} && "
+else
+  TRIGGER=""
+fi
+
+python3 "${REPO_ROOT}/prober/prober.py" \
+  --url "http://127.0.0.1:${PORT}/api/work" \
+  --interval 0.2 \
+  --until-command "/bin/sh -c '${TRIGGER}kubectl --context ${CONTEXT} rollout status deployment/proofline -n ${NAMESPACE} --timeout=300s'" \
+  --report "${REPORT}"
