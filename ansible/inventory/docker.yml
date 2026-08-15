@@ -1,0 +1,20 @@
+---
+# Dynamic inventory over the Docker API.
+#
+# Terraform creates the fleet and labels it; Ansible discovers it by that label.
+# Nothing is hardcoded and no inventory file has to be regenerated when
+# fleet_size changes -- which is the same reason you would use an AWS EC2
+# dynamic inventory rather than a static hosts file in a real environment.
+plugin: community.docker.docker_containers
+
+docker_host: unix://var/run/docker.sock
+
+filters:
+  label:
+    - "proofline.role=app"
+
+connection_type: docker-api
+
+# Only running containers are hosts. A stopped one is not a server that happens
+# to be down; it is not in the fleet.
+verbose_output: false

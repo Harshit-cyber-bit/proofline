@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+/var/log/proofline/*.log {
+    daily
+    rotate {{ baseline_log_retention_days }}
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su {{ app_user }} {{ app_group }}
+}

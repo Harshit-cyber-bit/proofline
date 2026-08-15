@@ -1,0 +1,39 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proofline
+spec:
+  # Each of these is a common default, and each one drops requests.
+  strategy:
+    rollingUpdate:
+      # The Kubernetes default. Explicitly permits a quarter of capacity to
+      # disappear mid-rollout.
+      maxUnavailable: 25%
+      maxSurge: 25%
+  # No soak before a pod counts as available.
+  minReadySeconds: 0
+  template:
+    spec:
+      # Too short for the app to finish draining, so the kubelet SIGKILLs it
+      # part-way through.
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: app
+          # No drain at all: exit immediately on SIGTERM.
+          env:
+            - name: APP_DRAIN_SECONDS
+              value: "0"
+          # No preStop hook, so the pod stops answering before the proxies have
+          # been told to stop sending. This one omission is the single most
+          # common cause of connection-refused errors during an otherwise
+          # correct rolling update.
+          lifecycle: null
+          # Readiness checked once a minute, so a draining pod stays in the
+          # endpoint list long after it stopped serving.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 60
+            failureThreshold: 3

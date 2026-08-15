@@ -1,0 +1,18 @@
+---
+# Protects against *voluntary* disruption -- node drains, cluster upgrades --
+# which rolling updates do not cover. maxUnavailable: 0 in the Deployment keeps
+# a deploy safe; this keeps a `kubectl drain` safe.
+#
+# Expressed as maxUnavailable rather than minAvailable so it stays correct when
+# the HPA changes the replica count underneath it.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: proofline
+  labels:
+    app.kubernetes.io/name: proofline
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proofline

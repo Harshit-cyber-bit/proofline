@@ -1,0 +1,39 @@
+---
+# Jenkins for the local demo, configured entirely from code.
+#
+# The controller is disposable on purpose: everything about it -- plugins,
+# credentials scaffolding, the job itself -- comes from casc.yaml and
+# plugins.txt. A Jenkins you configured by clicking is a Jenkins nobody can
+# rebuild, and rebuilding it is exactly what happens after it breaks.
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proofline-jenkins
+    restart: unless-stopped
+    user: root
+    ports:
+      - "8081:8080"
+      - "50000:50000"
+    environment:
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+      CASC_JENKINS_CONFIG: /var/jenkins_home/casc.yaml
+      JENKINS_ADMIN_PASSWORD: proofline
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - ./casc.yaml:/var/jenkins_home/casc.yaml:ro
+      # The agent builds images and talks to kind, so it needs the host's
+      # Docker socket and kubeconfig. Fine for a laptop demo; not a pattern to
+      # copy into a shared controller, where it hands every job root on the host.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.kube:/var/jenkins_home/.kube
+    networks:
+      - kind
+
+volumes:
+  jenkins_home:
+
+networks:
+  kind:
+    external: true

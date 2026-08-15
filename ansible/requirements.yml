@@ -1,0 +1,7 @@
+---
+# The only collection this repo needs, and only for the local Docker inventory.
+# Every task in every role uses ansible.builtin, so the playbooks run against
+# real hosts with nothing but ansible-core installed.
+collections:
+  - name: community.docker
+    version: ">=3.10.0"

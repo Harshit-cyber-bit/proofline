@@ -1,0 +1,7 @@
+---
+app_runtime_packages:
+  - python3-pip
+  - python3-venv
+app_runtime_venv: "{{ app_home }}/venv"
+app_runtime_workers: 2
+app_runtime_drain_seconds: 15

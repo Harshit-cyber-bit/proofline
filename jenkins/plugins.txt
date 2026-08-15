@@ -1,0 +1,8 @@
+configuration-as-code:latest
+workflow-aggregator:latest
+git:latest
+pipeline-stage-view:latest
+timestamper:latest
+ws-cleanup:latest
+credentials-binding:latest
+job-dsl:latest

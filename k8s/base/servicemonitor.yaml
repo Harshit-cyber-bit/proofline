@@ -1,0 +1,39 @@
+---
+# Tells the Prometheus Operator to scrape this service.
+#
+# jobLabel is the load-bearing field. Every SLO recording rule and the
+# pipeline's promotion gate select on job="proofline"; without this, Prometheus
+# derives a job name from the service and namespace, every one of those queries
+# silently returns nothing, and "no data" looks exactly like "no errors".
+#
+# The ProoflineNoMetrics alert in slo/rules/ exists because of this failure mode.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: proofline
+  labels:
+    app.kubernetes.io/name: proofline
+spec:
+  jobLabel: app.kubernetes.io/name
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proofline
+  # Scrape every environment's namespace with one ServiceMonitor, so adding an
+  # environment does not mean remembering to add monitoring for it.
+  namespaceSelector:
+    matchNames:
+      - proofline-dev
+      - proofline-staging
+      - proofline-prod
+  endpoints:
+    - port: http
+      path: /metrics
+      # 15s so the pipeline's 10-minute promotion window holds ~40 samples.
+      # At the 30s default the gate would judge a deployment on 20 points.
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        # Carry the namespace through as a label, since the gate selects on it
+        # to tell one environment's numbers from another's.
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace

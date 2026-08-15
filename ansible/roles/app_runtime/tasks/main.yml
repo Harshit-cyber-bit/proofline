@@ -1,0 +1,64 @@
+---
+# Prepares each host to run the application: a virtualenv, a systemd unit, and
+# the same drain semantics the Kubernetes deployment uses.
+#
+# The unit below is the VM-shaped equivalent of the pod spec: a graceful stop
+# with a timeout longer than the drain window, and a restart policy that does
+# not mask a crash loop.
+
+- name: Ensure runtime packages are present
+  ansible.builtin.package:
+    name: "{{ app_runtime_packages }}"
+    state: present
+
+- name: Create the application virtualenv
+  ansible.builtin.command: "python3 -m venv {{ app_runtime_venv }}"
+  args:
+    creates: "{{ app_runtime_venv }}/bin/python"
+
+- name: Install the application dependencies
+  ansible.builtin.pip:
+    name:
+      - flask==3.0.3
+      - gunicorn==22.0.0
+      - prometheus-client==0.20.0
+    virtualenv: "{{ app_runtime_venv }}"
+    state: present
+  notify: Restart proofline
+
+- name: Deploy the application
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../app/app.py"
+    dest: "{{ app_home }}/bin/app.py"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0644"
+  notify: Restart proofline
+
+- name: Install the application unit
+  ansible.builtin.template:
+    src: proofline.service.j2
+    dest: /etc/systemd/system/proofline.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart proofline
+
+- name: Enable and start the application
+  ansible.builtin.systemd_service:
+    name: proofline
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for the application to answer its readiness probe
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ app_port }}/readyz"
+    status_code: 200
+  register: app_runtime_ready
+  retries: 12
+  delay: 5
+  until: app_runtime_ready is succeeded
+  # Without this the play reports success the moment systemd accepts the unit,
+  # which is before the application can serve anything. A green Ansible run
+  # against a dead service is worse than a red one.

@@ -1,0 +1,42 @@
+# {{ ansible_managed }}
+[Unit]
+Description=proofline demo application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ app_user }}
+Group={{ app_group }}
+WorkingDirectory={{ app_home }}/bin
+
+Environment=PORT={{ app_port }}
+Environment=APP_ENVIRONMENT=fleet
+Environment=APP_DRAIN_SECONDS={{ app_runtime_drain_seconds }}
+
+ExecStart={{ app_runtime_venv }}/bin/gunicorn \
+    --bind 0.0.0.0:{{ app_port }} \
+    --workers {{ app_runtime_workers }} \
+    --graceful-timeout {{ app_runtime_drain_seconds + 5 }} \
+    --access-logfile /var/log/proofline/access.log \
+    --error-logfile /var/log/proofline/error.log \
+    app:app
+
+# SIGTERM triggers the application's own drain. The stop timeout must exceed
+# that drain, or systemd SIGKILLs mid-shutdown and the graceful path never
+# completes -- the same mistake as too short a terminationGracePeriodSeconds.
+KillSignal=SIGTERM
+TimeoutStopSec={{ app_runtime_drain_seconds + 15 }}
+
+Restart=on-failure
+RestartSec=5
+# Give up after repeated rapid failures instead of hiding a crash loop behind
+# an endless restart.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/log/proofline
+
+[Install]
+WantedBy=multi-user.target

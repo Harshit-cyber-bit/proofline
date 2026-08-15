@@ -1,0 +1,11 @@
+---
+app_name: proofline
+app_user: proofline
+app_group: proofline
+app_home: /opt/proofline
+app_port: 8080
+
+node_exporter_version: "1.8.2"
+node_exporter_port: 9100
+
+timezone: Etc/UTC

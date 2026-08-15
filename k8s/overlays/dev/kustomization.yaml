@@ -1,0 +1,21 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: proofline-dev
+namePrefix: ""
+
+resources:
+  - ../../base
+
+commonLabels:
+  app.kubernetes.io/instance: dev
+
+patches:
+  - path: replicas.yaml
+    target:
+      kind: Deployment
+      name: proofline
+
+# Dev is the only environment allowed to inject faults. `make burn` uses this
+# to drive the SLO into a real breach and prove the promotion gate blocks.
+configMapGenerator: []

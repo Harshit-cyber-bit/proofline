@@ -1,0 +1,19 @@
+---
+- name: Configure the application fleet
+  hosts: all
+  become: true
+  gather_facts: true
+
+  # One host at a time. Configuration management across a serving fleet is a
+  # rolling change like any other: taking every host at once is how a bad
+  # playbook becomes an outage instead of one failed host.
+  serial: 1
+  max_fail_percentage: 0
+
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: node_exporter
+      tags: [monitoring]
+    - role: app_runtime
+      tags: [app]

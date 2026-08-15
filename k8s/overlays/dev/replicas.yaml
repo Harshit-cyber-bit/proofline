@@ -1,0 +1,10 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proofline
+spec:
+  # Two replicas even in dev. A single-replica deployment cannot roll without
+  # downtime, so testing the rollout in dev with one replica would prove
+  # nothing about staging or prod.
+  replicas: 2

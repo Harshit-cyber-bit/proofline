@@ -1,0 +1,68 @@
+---
+# Baseline configuration every host in the fleet gets, regardless of role.
+# Written to be idempotent: running it twice must change nothing the second
+# time, which the CI check asserts by running it twice and diffing the counts.
+
+- name: Ensure baseline packages are present
+  ansible.builtin.package:
+    name: "{{ baseline_packages }}"
+    state: present
+  register: baseline_packages_result
+  retries: 3
+  delay: 5
+  until: baseline_packages_result is succeeded
+
+# Done with builtin modules rather than community.general.timezone, so the whole
+# playbook runs on a bare ansible-core install. The only collection this repo
+# needs is community.docker, and only for the local inventory -- not for any task.
+- name: Set the system timezone
+  ansible.builtin.file:
+    src: "/usr/share/zoneinfo/{{ timezone }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+
+- name: Ensure the application group exists
+  ansible.builtin.group:
+    name: "{{ app_group }}"
+    state: present
+    system: true
+
+- name: Ensure the application user exists
+  ansible.builtin.user:
+    name: "{{ app_user }}"
+    group: "{{ app_group }}"
+    home: "{{ app_home }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    state: present
+
+- name: Create the application directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0755"
+  loop:
+    - "{{ app_home }}"
+    - "{{ app_home }}/bin"
+    - "{{ app_home }}/etc"
+    - /var/log/proofline
+
+- name: Configure log rotation
+  ansible.builtin.template:
+    src: logrotate.j2
+    dest: /etc/logrotate.d/proofline
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Record what configured this host and when
+  ansible.builtin.template:
+    src: release.j2
+    dest: "{{ app_home }}/etc/release"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0644"

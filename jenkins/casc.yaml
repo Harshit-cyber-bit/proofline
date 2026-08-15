@@ -1,0 +1,47 @@
+---
+# Jenkins Configuration as Code. The controller in this repo has no manual
+# setup steps: delete the volume, run compose, and you are back where you were.
+jenkins:
+  systemMessage: |
+    proofline -- a delivery pipeline that proves its own claims.
+    Every rollout is probed for dropped requests and gated on SLO health.
+
+  numExecutors: 2
+  mode: NORMAL
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: "${JENKINS_ADMIN_PASSWORD}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+
+unclassified:
+  location:
+    url: http://localhost:8081/
+
+jobs:
+  - script: >
+      pipelineJob('proofline') {
+        description('Build, deploy and prove the proofline demo service.')
+        definition {
+          cpsScmFlowDefinition {
+            scm {
+              scmGit {
+                remote { url('https://github.com/YOUR_HANDLE/proofline.git') }
+                branches('*/main')
+              }
+            }
+            scriptPath('jenkins/Jenkinsfile')
+            lightweight(true)
+          }
+        }
+      }

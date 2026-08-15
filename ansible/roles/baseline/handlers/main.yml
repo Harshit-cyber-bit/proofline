@@ -1,0 +1,4 @@
+---
+# No handlers currently required by the baseline role. Kept as an explicit,
+# empty file so the role structure stays predictable for anyone adding one.
+[]

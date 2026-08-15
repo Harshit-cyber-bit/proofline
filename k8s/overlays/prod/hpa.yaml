@@ -1,0 +1,8 @@
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: proofline
+spec:
+  minReplicas: 4
+  maxReplicas: 20

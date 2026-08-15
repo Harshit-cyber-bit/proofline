@@ -1,0 +1,10 @@
+---
+profile: production
+
+exclude_paths:
+  - collections/
+
+# The Docker inventory plugin comes from community.docker, which CI does not
+# install because no task uses it -- only the local demo inventory does.
+mock_modules:
+  - community.docker.docker_containers

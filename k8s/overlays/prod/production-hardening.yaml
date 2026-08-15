@@ -1,0 +1,36 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proofline
+spec:
+  replicas: 4
+  # Longer soak before a new pod counts as available. In prod the cost of a
+  # slow rollout is minutes; the cost of a fast bad one is an incident.
+  minReadySeconds: 30
+  template:
+    spec:
+      # Real anti-affinity rather than best-effort spreading: in production a
+      # pod that cannot be placed on its own node should stay pending and be
+      # noticed, not silently double up and quietly remove the redundancy.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: proofline
+      containers:
+        - name: app
+          env:
+            - name: APP_DRAIN_SECONDS
+              value: "25"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

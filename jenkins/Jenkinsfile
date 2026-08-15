@@ -1,0 +1,197 @@
+// proofline delivery pipeline.
+//
+// The shape is ordinary: validate, build, then promote through dev, staging and
+// prod. What is not ordinary is that each deployment has to *prove* it was safe
+// before the next one starts:
+//
+//   * a prober runs for the whole rollout and fails the stage if a single
+//     request is dropped, and
+//   * the SLO gate asks Prometheus whether the thing just deployed made the
+//     environment worse, and refuses to promote if it did or if there was not
+//     enough traffic to know.
+//
+// Everything the pipeline concludes is archived as JSON, so a deployment's
+// evidence outlives the console log.
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        // A hung rollout should fail the build rather than hold an executor all
+        // night. Generous enough for three environments, finite either way.
+        timeout(time: 45, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        booleanParam(
+            name: 'DEPLOY_PROD',
+            defaultValue: false,
+            description: 'Continue past staging to production (still requires approval).'
+        )
+        string(
+            name: 'PROBE_INTERVAL',
+            defaultValue: '0.2',
+            description: 'Seconds between prober requests during each rollout.'
+        )
+    }
+
+    environment {
+        REGISTRY    = 'localhost:5001'
+        IMAGE       = "${REGISTRY}/proofline/app"
+        TAG         = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(12) : env.BUILD_NUMBER}"
+        PROMETHEUS  = 'http://localhost:30090'
+        KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
+    }
+
+    stages {
+
+        stage('Validate') {
+            // Everything that can be checked without a cluster, checked before
+            // anything is built. Cheap failures should happen first.
+            parallel {
+                stage('Unit tests') {
+                    steps { sh 'python3 -m pytest prober/tests slo/tests -q' }
+                }
+                stage('Manifests and Terraform') {
+                    steps { sh 'python3 hack/validate.py' }
+                }
+                stage('Ansible') {
+                    steps {
+                        sh '''
+                            cd ansible
+                            ansible-lint site.yml roles/
+                            ansible-playbook site.yml --syntax-check -i localhost,
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh """
+                    docker build -t ${IMAGE}:${TAG} -t ${IMAGE}:latest ./app
+                    docker push ${IMAGE}:${TAG}
+                    docker push ${IMAGE}:latest
+                """
+            }
+        }
+
+        stage('Deploy dev') {
+            steps {
+                script { deployAndProve('dev') }
+            }
+        }
+
+        stage('Deploy staging') {
+            steps {
+                script { deployAndProve('staging') }
+            }
+        }
+
+        stage('Approve production') {
+            when { expression { params.DEPLOY_PROD } }
+            steps {
+                // The only human step in the pipeline, and it comes *after* two
+                // environments have already proven the build rather than before
+                // anyone has evidence. Approving a build nobody has measured is
+                // ceremony, not control.
+                timeout(time: 30, unit: 'MINUTES') {
+                    input(
+                        message: "Promote ${TAG} to production?",
+                        ok: 'Deploy'
+                    )
+                }
+            }
+        }
+
+        stage('Deploy production') {
+            when { expression { params.DEPLOY_PROD } }
+            steps {
+                script { deployAndProve('prod') }
+            }
+        }
+    }
+
+    post {
+        always {
+            // The evidence, kept. A pipeline that proves things and then throws
+            // the proof away has not proven anything you can point at later.
+            archiveArtifacts(
+                artifacts: 'reports/**/*.json',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
+        }
+        failure {
+            echo 'Deployment blocked. Check the archived probe and gate reports for why.'
+        }
+    }
+}
+
+// Deploy to one environment, prove it did not drop traffic, then ask the SLO
+// gate whether it earned the next environment.
+void deployAndProve(String environment) {
+    String namespace = "proofline-${environment}"
+    String reports = "reports/${environment}"
+
+    sh "mkdir -p ${reports}"
+
+    // Point the overlay at the exact image this build produced. Never 'latest':
+    // the tag you tested and the tag that deploys must be the same immutable
+    // reference, or none of the evidence below refers to anything in particular.
+    sh """
+        cd k8s/overlays/${environment}
+        kustomize edit set image proofline/app=${IMAGE}:${TAG}
+    """
+
+    sh "kubectl apply -k k8s/overlays/${environment}"
+
+    // Port-forward so the prober hits the Service the way traffic does, rather
+    // than a single pod IP -- probing one pod would miss exactly the endpoint
+    // churn that a bad rollout causes.
+    String forward = "kubectl port-forward -n ${namespace} svc/proofline 18080:80"
+
+    sh """
+        set -e
+        ${forward} &
+        FORWARD_PID=\$!
+        trap "kill \$FORWARD_PID 2>/dev/null || true" EXIT
+        sleep 5
+
+        python3 prober/prober.py \\
+            --url http://127.0.0.1:18080/api/work \\
+            --interval ${params.PROBE_INTERVAL} \\
+            --until-command "kubectl rollout status deployment/proofline -n ${namespace} --timeout=300s" \\
+            --report ${reports}/probe.json
+    """
+
+    // Give the deployment a few minutes of steady traffic before judging it.
+    // The gate needs a sample, and a verdict formed ten seconds after rollout
+    // is a verdict about nothing.
+    sh """
+        set -e
+        ${forward} &
+        FORWARD_PID=\$!
+        trap "kill \$FORWARD_PID 2>/dev/null || true" EXIT
+        sleep 3
+
+        python3 prober/prober.py \\
+            --url http://127.0.0.1:18080/api/work \\
+            --duration 120 --interval 0.1 \\
+            --report ${reports}/soak.json
+    """
+
+    sh """
+        python3 slo/gate.py \\
+            --prometheus ${PROMETHEUS} \\
+            --environment ${environment} \\
+            --window 10m \\
+            --report ${reports}/gate.json
+    """
+
+    echo "${environment}: rollout dropped no traffic and passed its SLO gate"
+}

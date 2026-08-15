@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.schema-cache/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+
+# Ansible
+ansible/collections/
+*.retry
+
+# Pipeline evidence is regenerated on every run; the archived copies in Jenkins
+# and in CI artifacts are the ones that matter.
+reports/
+
+.DS_Store
+.venv/
+venv/
+
+# ansible-lint generates mock modules here
+ansible/.ansible/

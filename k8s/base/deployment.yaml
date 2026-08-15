@@ -1,0 +1,157 @@
+---
+# The zero-downtime settings live here, and every one of them is load-bearing.
+# The prober exists to catch what happens when any of them is wrong, so it is
+# worth saying exactly what each does.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proofline
+  labels:
+    app.kubernetes.io/name: proofline
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+
+  # A pod counts as available only after it has been ready for this long. Without
+  # it, a pod that passes one readiness check and then crashes still lets the
+  # rollout march on to the next pod, and the whole fleet is replaced with
+  # something broken before anything notices.
+  minReadySeconds: 10
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable: 0 is the setting that makes "zero-downtime" mean it.
+      # The default is 25%, which explicitly permits a quarter of capacity to be
+      # gone mid-rollout -- fine for throughput, not fine for a claim of zero.
+      maxUnavailable: 0
+      maxSurge: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proofline
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: proofline
+        app.kubernetes.io/component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: proofline
+
+      # Must exceed the app's drain window (APP_DRAIN_SECONDS) plus the preStop
+      # sleep, or the kubelet SIGKILLs the pod part-way through draining and the
+      # careful shutdown logic never gets to finish.
+      terminationGracePeriodSeconds: 45
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread replicas across nodes where possible, so that losing one node
+      # cannot take the whole service with it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: proofline
+
+      containers:
+        - name: app
+          image: proofline/app:dev
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          env:
+            - name: PORT
+              value: "8080"
+            - name: APP_DRAIN_SECONDS
+              value: "15"
+            - name: APP_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+          # Liveness asks "is this process wedged". It must NOT track readiness:
+          # a draining pod is not a broken one, and restarting it mid-drain
+          # converts a graceful shutdown into dropped connections.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # Readiness asks "should traffic come here right now". Checked often,
+          # with a threshold of 1, so that a pod leaves the endpoint list
+          # promptly once it starts draining.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 1
+
+          # Startup probe buys a slow first boot time without having to weaken
+          # the liveness probe for the entire life of the pod.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+
+          lifecycle:
+            preStop:
+              exec:
+                # Kubernetes removes the pod from Endpoints and sends SIGTERM
+                # *concurrently*, and every kube-proxy and ingress learns about
+                # the removal asynchronously. This sleep holds the pod open long
+                # enough for that propagation to finish. Skipping it is the most
+                # common cause of connection-refused errors during an otherwise
+                # correct rolling update -- and it is exactly what the prober
+                # reports as consecutive failures.
+                command: ["/bin/sh", "-c", "sleep 5"]
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

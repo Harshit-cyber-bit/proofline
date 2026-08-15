@@ -1,0 +1,6 @@
+# Pinned exactly. A range here means the image you tested and the image that
+# ships can contain different code, which quietly invalidates every measurement
+# the pipeline takes.
+flask==3.0.3
+gunicorn==22.0.0
+prometheus-client==0.20.0

@@ -1,0 +1,75 @@
+---
+# The service level objectives, written once, in the place people will look.
+#
+# These are the source of truth. The PrometheusRule in slo/rules/ implements
+# them, and the pipeline's promotion gate reads the same objectives from here --
+# so an SLO cannot drift out of agreement with the thing enforcing it.
+service: proofline
+
+objectives:
+  - name: availability
+    description: >-
+      The proportion of requests that do not fail. A request counts as failed
+      if the service answered 5xx or did not answer at all. 4xx is excluded on
+      purpose: a client asking for something that does not exist is not the
+      service being unavailable, and counting it means every scanner and stale
+      bookmark eats the error budget.
+    objective: 99.5
+    window: 30d
+    sli:
+      error_query: |
+        sum(rate(http_requests_total{job="proofline",status=~"5.."}[{window}]))
+      total_query: |
+        sum(rate(http_requests_total{job="proofline"}[{window}]))
+
+  - name: latency
+    description: >-
+      The proportion of requests served faster than 250ms. The threshold sits
+      exactly on a histogram bucket boundary; picking a value between buckets
+      means the number reported is an interpolation nobody experienced.
+    objective: 99.0
+    window: 30d
+    threshold_seconds: 0.25
+    sli:
+      error_query: |
+        sum(rate(http_request_duration_seconds_bucket{job="proofline",le="0.25"}[{window}]))
+      total_query: |
+        sum(rate(http_request_duration_seconds_count{job="proofline"}[{window}]))
+
+# Burn-rate alerting, per the Google SRE workbook. Two windows per severity:
+# a long one to establish that the budget really is burning, and a short one so
+# that an alert resolves promptly once it stops. A single-window alert either
+# pages on noise or notices far too late.
+burn_rates:
+  - severity: page
+    long_window: 1h
+    short_window: 5m
+    factor: 14.4
+    description: 2% of the 30-day budget consumed in one hour
+  - severity: page
+    long_window: 6h
+    short_window: 30m
+    factor: 6
+    description: 5% of the budget consumed in six hours
+  - severity: ticket
+    long_window: 24h
+    short_window: 2h
+    factor: 3
+    description: 10% of the budget consumed in a day
+  - severity: ticket
+    long_window: 3d
+    short_window: 6h
+    factor: 1
+    description: budget on track to be exhausted before the window closes
+
+# What the deployment pipeline enforces before promoting a build onward.
+promotion_gate:
+  # Deliberately shorter than any burn-rate window. The gate is not asking
+  # "is the service healthy overall" -- it is asking "did the thing I just
+  # deployed make it worse", and that question has a much shorter horizon.
+  window: 10m
+  max_error_ratio: 0.01
+  # A gate that passes because nothing was running is not a gate. If the
+  # environment saw fewer requests than this, the answer is "unknown", and
+  # unknown does not promote.
+  min_requests: 100
