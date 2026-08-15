@@ -129,7 +129,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck hack/*.sh
+          shellcheck hack/*.sh hack/windows/*.sh
 
   prove:
     name: end-to-end proof (kind)

@@ -8,6 +8,47 @@ those.
 
 ---
 
+## On Windows? Start here instead
+
+Two scripts do all of this for you.
+
+**1. In an Administrator PowerShell** (enables WSL2, installs Ubuntu, sets
+memory limits and systemd):
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\hack\windows\bootstrap-windows.ps1
+```
+
+If it asks you to reboot, reboot and run it again — it resumes.
+
+On 8 GB of RAM, run it as
+`.\hack\windows\bootstrap-windows.ps1 -WslMemory 5GB -WslProcessors 2` instead.
+
+**2. Inside Ubuntu** (installs Docker Engine, kind, kubectl, kustomize, helm,
+Terraform, Ansible, then runs the whole demo):
+
+```bash
+wsl -d Ubuntu-24.04
+cd ~ && unzip /mnt/c/Users/<you>/Downloads/proofline.zip
+cd proofline
+bash hack/windows/bootstrap-wsl.sh          # install + stages 0-2
+bash hack/windows/bootstrap-wsl.sh --full   # also monitoring and Ansible
+```
+
+It is idempotent — if a step fails, fix it and re-run; it picks up where it
+stopped. It finishes by printing your real numbers from both probe runs.
+
+Two things it deliberately does **not** do: install Docker Desktop (Docker
+Engine goes inside WSL2 instead — no licence question, and the cgroup layout the
+Ansible fleet needs), and touch anything outside WSL beyond `%USERPROFILE%\.wslconfig`,
+which it backs up first.
+
+The rest of this document is the manual version, and the reference for when
+something goes wrong.
+
+---
+
 ## Stage 0 — Prove the repo is sound (2 minutes, no Docker)
 
 ```bash
