@@ -1,4 +1,9 @@
-FROM jenkins/jenkins:2.479.1-lts-jdk17
+# The core version is a dependency of every plugin, so it is the first thing to
+# bump and the last thing to guess. 2.479.1 was fine when this was written; the
+# current plugin releases require 2.504.3, and the failure arrives as fifty
+# lines of "requires a greater version of Jenkins" that name plugins rather than
+# the base image. See plugins.txt.
+FROM jenkins/jenkins:2.504.3-lts-jdk17
 
 USER root
 

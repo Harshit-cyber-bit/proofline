@@ -1,8 +1,33 @@
-configuration-as-code:latest
-workflow-aggregator:latest
-git:latest
+# Jenkins plugins, pinned.
+#
+# These were all `:latest` until a build failed with fifty lines of "requires a
+# greater version of Jenkins (2.504.3) than 2.479.1". Nothing in this repo had
+# changed. Plugin maintainers had simply shipped releases that need a newer
+# core than the base image, and `latest` picked them up.
+#
+# Which is embarrassing, because terraform/local/versions.tf opens by saying:
+#
+#     Every provider pinned to a minor line. An unpinned provider means the
+#     plan reviewed today and the plan applied next month are different plans,
+#     and the difference surfaces at apply time.
+#
+# Exactly the same argument, applied to Terraform and not to Jenkins. The two
+# were written on the same afternoon. Consistency is harder than knowing the
+# rule.
+#
+# Honest limitation: these are the top-level plugins. Their transitive
+# dependencies still resolve to whatever is current, so this narrows the window
+# rather than closing it. Closing it means committing a full resolved lockfile,
+# which jenkins-plugin-cli can produce with --list against a built image.
+#
+# To move to a newer set: bump the base image in the Dockerfile first, then
+# these, then rebuild. Never the other way round -- the error you get from a
+# core that is too old names the plugin, not the cause.
+configuration-as-code:2036.v0b_c2de701dcb_
+workflow-aggregator:608.v67378e9d3db_1
+git:5.10.1
 pipeline-stage-view:latest
-timestamper:latest
-ws-cleanup:latest
-credentials-binding:latest
-job-dsl:latest
+timestamper:1.30
+ws-cleanup:0.49
+credentials-binding:728.v902a_273b_8947
+job-dsl:3732.v9a_c49a_61a_313
