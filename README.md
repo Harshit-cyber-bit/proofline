@@ -265,6 +265,11 @@ jenkins/      Jenkinsfile, controller image, configuration as code
 hack/         cluster setup, rollout probing, offline validator
 ```
 
+## The write-up
+
+The long-form version — including the three ways the test itself was wrong
+before it worked — is in [docs/blog.md](docs/blog.md).
+
 ## Licence
 
 MIT.
