@@ -28,16 +28,35 @@ unclassified:
   location:
     url: http://localhost:8081/
 
+# The seed job, created by Job DSL at boot. Nothing here is clicked.
+#
+# Job DSL has two dialects for the same thing and they cannot be mixed, which
+# is what broke this and took a Jenkins that would not boot to work out.
+#
+#   * The classic, hand-written API: `git { remote { url(...) }; branch(...) }`.
+#     Stable for a decade, documented everywhere.
+#   * The dynamic API, auto-generated from each plugin's own constructors:
+#     `scmGit { userRemoteConfigs { userRemoteConfig { url(...) } }
+#      branches { branchSpec { name(...) } } }`. It mirrors GitSCM's actual
+#     shape, so it has no `remote` and no `branches('*/main')` shorthand.
+#
+# This file had `scmGit` -- the dynamic one -- with `remote {}` and
+# `branches('*/main')` inside it, which are classic methods. Groovy resolved
+# neither, the seed script threw, and configuration-as-code turns a failed job
+# script into ConfigurationAsCodeBootFailure: Jenkins does not start at all.
+# One wrong method name in a job definition takes down the controller.
+#
+# Classic dialect below, deliberately.
 jobs:
   - script: >
       pipelineJob('proofline') {
         description('Build, deploy and prove the proofline demo service.')
         definition {
-          cpsScmFlowDefinition {
+          cpsScm {
             scm {
-              scmGit {
+              git {
                 remote { url('https://github.com/YOUR_HANDLE/proofline.git') }
-                branches('*/main')
+                branch('*/main')
               }
             }
             scriptPath('jenkins/Jenkinsfile')

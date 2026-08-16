@@ -347,13 +347,40 @@ make jenkins        # http://localhost:8081, admin / proofline
 The controller is configured entirely from `jenkins/casc.yaml` — no setup
 wizard, no clicking.
 
-> **If the `proofline` job is missing:** check `make jenkins-logs` for JCasC
-> errors. Job DSL scripts sometimes need approval the first time under
-> **Manage Jenkins → In-process Script Approval**.
+**A started container is not a working Jenkins.** Four checks:
+
+```bash
+# 1. Did it finish starting? A JCasC failure stops the boot entirely.
+docker logs proofline-jenkins 2>&1 | grep -c "Jenkins is fully up and running"
+
+# 2. Did Job DSL create the job? This is the actual claim.
+curl -s -u admin:proofline "http://localhost:8081/api/json?tree=jobs[name,url]" \
+  | python3 -m json.tool
+
+# 3. Can the agent reach the cluster?
+docker exec proofline-jenkins kubectl get nodes
+
+# 4. Can it reach the Service the way the Jenkinsfile will?
+docker exec proofline-jenkins curl -s http://proofline-control-plane:30080/api/work
+```
+
+> **If check 1 returns 0**, configuration-as-code failed and Jenkins is not
+> running — a bad job script does not produce a missing job, it produces
+> `ConfigurationAsCodeBootFailure` and no controller at all. The stack trace is
+> mostly Groovy plumbing; the line that matters is the message above it:
 >
-> **Before running the job:** update the repo URL in `jenkins/casc.yaml` to your
-> own fork, and confirm the agent can reach the cluster:
-> `docker exec proofline-jenkins kubectl --context kind-proofline get nodes`.
+> ```bash
+> docker logs proofline-jenkins 2>&1 \
+>   | grep -iE "No signature of method|MissingMethod|startup failed|script, line" | head
+> ```
+>
+> Nearly always a Job DSL dialect mix-up. See the comment above `jobs:` in
+> `jenkins/casc.yaml` — the classic and dynamic APIs describe the same git
+> checkout with different method names and cannot be combined.
+>
+> **Before running the job:** put your GitHub handle in `jenkins/casc.yaml`,
+> then `docker compose -f jenkins/docker-compose.yml restart`. Until the repo
+> is pushed the job exists but cannot check anything out.
 
 This stage is optional for the blog. Stages 1–3 are the substance; Jenkins is
 the wrapper. If it resists, ship without it and add it later.
