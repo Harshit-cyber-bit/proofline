@@ -1,6 +1,11 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
+# pip drops console scripts (ansible-lint, pytest, ruff) into ~/.local/bin,
+# which a fresh login shell does not always have on PATH. Adding it here means
+# `make lint-ansible` works without anyone having to remember to fix PATH.
+export PATH := $(HOME)/.local/bin:$(PATH)
+
 CLUSTER_NAME ?= proofline
 KUBE_CONTEXT ?= kind-$(CLUSTER_NAME)
 REGISTRY     ?= localhost:5001
@@ -43,8 +48,33 @@ down: ## Tear everything down
 
 ##@ Infrastructure
 
+.PHONY: check-docker
+check-docker: ## Verify the Docker daemon is reachable as this user
+	@docker info >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "$(BOLD)Cannot talk to the Docker daemon as $$(id -un).$(RESET)"; \
+		echo ""; \
+		if id -nG "$$(id -un)" | grep -qw docker; then \
+			echo "You ARE in the docker group, but this shell started before that"; \
+			echo "was true. Group membership only applies to new login shells."; \
+			echo ""; \
+			echo "  Fix, in order of preference:"; \
+			echo "    exec newgrp docker          # this shell, right now"; \
+			echo "    wsl --shutdown              # from Windows, then reopen Ubuntu"; \
+		else \
+			echo "  sudo usermod -aG docker $$(id -un)"; \
+			echo "  exec newgrp docker"; \
+		fi; \
+		echo ""; \
+		echo "  Also check the daemon is running:"; \
+		echo "    sudo systemctl start docker    # or: sudo service docker start"; \
+		echo ""; \
+		exit 1; \
+	}
+	@echo "    docker ok ($$(docker version --format '{{.Server.Version}}' 2>/dev/null))"
+
 .PHONY: cluster
-cluster: ## Create the kind cluster and local registry
+cluster: check-docker ## Create the kind cluster and local registry
 	$(call banner,creating cluster)
 	@./hack/kind-with-registry.sh
 
@@ -59,6 +89,7 @@ terraform-local: ## Provision the local fleet and monitoring stack with Terrafor
 	$(call banner,terraform: local stack)
 	@cd terraform/local && terraform init -input=false && terraform apply -auto-approve
 	@$(KUBECTL) apply -f slo/rules/proofline-slo-rules.yaml
+	@$(KUBECTL) apply -k k8s/monitoring
 
 .PHONY: ansible
 ansible: ## Configure the server fleet with Ansible
@@ -81,7 +112,7 @@ ansible-idempotence: ## Run the playbook twice and fail if the second run change
 ##@ Delivery
 
 .PHONY: build
-build: ## Build and push the application image
+build: check-docker ## Build and push the application image
 	$(call banner,building $(IMAGE):$(TAG))
 	@docker build -t $(IMAGE):$(TAG) ./app
 	@docker push $(IMAGE):$(TAG)

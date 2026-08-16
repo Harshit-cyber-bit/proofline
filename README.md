@@ -233,7 +233,8 @@ make aws-destroy   # the reason this target exists is that forgetting is normal
 app/          demo service; drain-aware, instrumented
 prober/       the availability prober and its analysis  ← the differentiator
 slo/          SLO definitions, Prometheus rules, promotion gate
-k8s/          base + dev/staging/prod overlays, and a deliberately broken one
+k8s/          base + dev/staging/prod overlays, a deliberately broken one,
+              and monitoring/ (applied only once the operator exists)
 terraform/    local stack (free) and AWS reference (optional)
 ansible/      fleet roles: baseline, node_exporter, app_runtime
 jenkins/      Jenkinsfile, controller image, configuration as code

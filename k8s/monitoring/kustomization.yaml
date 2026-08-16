@@ -1,0 +1,9 @@
+---
+# Applied only after the Prometheus Operator exists. Kept separate from
+# k8s/base so that deploying the application never requires monitoring to be
+# installed first.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - servicemonitor.yaml

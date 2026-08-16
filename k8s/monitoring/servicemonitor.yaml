@@ -1,6 +1,12 @@
 ---
 # Tells the Prometheus Operator to scrape this service.
 #
+# Deliberately NOT part of k8s/base. ServiceMonitor is a custom resource, and
+# its CRD does not exist until kube-prometheus-stack is installed. Keeping it in
+# the base meant `make deploy` failed with "no matches for kind ServiceMonitor"
+# on a cluster that had no monitoring yet -- which made stages 1 and 2 depend on
+# stage 3 for no reason. Applied by `make terraform-local`, after the operator.
+#
 # jobLabel is the load-bearing field. Every SLO recording rule and the
 # pipeline's promotion gate select on job="proofline"; without this, Prometheus
 # derives a job name from the service and namespace, every one of those queries
@@ -11,6 +17,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: proofline
+  namespace: monitoring
   labels:
     app.kubernetes.io/name: proofline
 spec:

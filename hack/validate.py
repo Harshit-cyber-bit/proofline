@@ -154,7 +154,9 @@ def check_kubernetes(version: str) -> None:
         f"\n{DIM}2. kubernetes manifests validate against upstream "
         f"{version} schemas{RESET}"
     )
-    manifests = sorted((REPO / "k8s" / "base").glob("*.yaml"))
+    manifests = sorted((REPO / "k8s" / "base").glob("*.yaml")) + sorted(
+        (REPO / "k8s" / "monitoring").glob("*.yaml")
+    )
 
     for path in manifests:
         for doc in load_yaml(path):
