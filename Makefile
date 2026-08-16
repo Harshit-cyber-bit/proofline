@@ -285,6 +285,14 @@ fmt: ## Format Terraform
 
 ##@ Observability
 
+.PHONY: prom-check
+prom-check: ## Confirm Prometheus is scraping the app before trusting the gate
+	$(call banner,prometheus scrape check)
+	@# A script, not an inline one-liner. The query contains braces and quotes
+	@# that must be percent-encoded, and escaping them through make -> sh ->
+	@# python is how you end up debugging your own quoting instead of the scrape.
+	@python3 hack/prom-check.py --prometheus $(PROMETHEUS) --job proofline
+
 .PHONY: grafana
 grafana: ## Print the Grafana URL and credentials
 	@echo "http://localhost:30300   admin / proofline"

@@ -244,14 +244,32 @@ make terraform-local
 Provisions the three-host fleet and installs kube-prometheus-stack, then applies
 the SLO rules.
 
-**Check:**
+**Check the scrape before you trust the gate:**
+
+```bash
+make prom-check
+```
+
+Three checks in order — Prometheus reachable, the `proofline` job label exists,
+targets are `up` — and if any of them fails it prints the specific thing to look
+at rather than a stack trace. Run this first. If the app is not being scraped,
+the gate will report "no data" and block every promotion; that is the gate
+working correctly, but you will waste an evening debugging the gate instead of
+the ServiceMonitor.
+
+By hand, if you prefer:
 
 ```bash
 curl -s localhost:30090/-/healthy                 # Prometheus is Healthy
 open http://localhost:30300                       # Grafana, admin / proofline
 
-curl -s 'localhost:30090/api/v1/query?query=up{job="proofline"}' | python3 -m json.tool
-# must return at least one result -- if empty, the ServiceMonitor is not matching
+# -G --data-urlencode is required: braces and quotes must be percent-encoded,
+# or Prometheus rejects the query with "parse error: unexpected =".
+curl -sG localhost:30090/api/v1/query \
+  --data-urlencode 'query=up{job="proofline"}' | python3 -m json.tool
+
+# What job labels does Prometheus actually know about?
+curl -sG localhost:30090/api/v1/label/job/values | python3 -m json.tool
 ```
 
 Then generate traffic and ask the gate:
@@ -262,11 +280,13 @@ make gate           # expect PASS
 make burn           # inject 20% errors -- expect BLOCKED
 ```
 
-> **If the gate says "no data":** Prometheus has not scraped the app under the
-> `proofline` job label. Check
-> `kubectl get svc -n proofline-dev --show-labels` for
-> `app.kubernetes.io/name=proofline`, since the ServiceMonitor's `jobLabel`
-> depends on it. Give it 60 seconds after deploying before judging.
+> **If the gate says "no data":** run `make prom-check` — it will tell you which
+> of the three links in the chain is broken. Usually Prometheus has not scraped
+> the app under the `proofline` job label; the ServiceMonitor's `jobLabel` reads
+> `app.kubernetes.io/name` off the *Service*, so
+> `kubectl get svc -n proofline-dev --show-labels` must show
+> `app.kubernetes.io/name=proofline`. Give it 60 seconds after deploying before
+> judging.
 >
 > **On 8 GB:** if Prometheus gets OOMKilled, set `monitoring_enabled = false`
 > and skip this stage. Stages 1, 2 and 4 do not need it.
