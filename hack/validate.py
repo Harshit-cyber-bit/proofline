@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Validate every layer of the repo without needing a cluster or a cloud account.
 
-Four checks:
+Five checks:
 
 1.  Every YAML and HCL file parses.
 2.  Every Kubernetes manifest validates against the *upstream* Kubernetes JSON
     schema for the target version, in strict mode -- so a typo'd or misplaced
     field is an error rather than something the API server silently ignores.
-3.  Every kustomize overlay references files that exist, and every patch targets
-    a resource that is actually in the base.
+3.  Every kustomize overlay references files that exist, every patch targets a
+    resource that is in the base, and no patch path escapes the kustomization
+    root (kustomize refuses those).
 4.  Every Terraform file parses, providers are version-pinned, and no variable
     is declared without a description.
+5.  Every container image names a registry, so nothing silently resolves to
+    Docker Hub.
 
 Point 2 is the one worth having. `kubectl apply --dry-run=client` does not catch
 misplaced fields, and a `readinesProbe` typo will apply cleanly and do nothing
@@ -194,6 +197,33 @@ def check_kubernetes(version: str) -> None:
                 ok(f"{path.name}: {kind} {api_version}")
 
 
+def check_images() -> None:
+    """Every container image must name a registry explicitly.
+
+    Docker resolves a bare `proofline/app` to `docker.io/proofline/app`. A
+    manifest that omits the registry therefore does not fail -- it succeeds
+    against the wrong one, and the error surfaces as "pull access denied",
+    which reads like an authentication problem rather than a missing prefix.
+    """
+    print(f"\n{DIM}5. container images name a registry explicitly{RESET}")
+
+    for path in sorted((REPO / "k8s").rglob("*.yaml")):
+        for doc in load_yaml(path):
+            spec = (doc.get("spec") or {}).get("template", {}).get("spec", {})
+            for container in spec.get("containers") or []:
+                image = container.get("image", "")
+                if not image:
+                    continue
+                registry = image.split("/")[0]
+                if "." not in registry and ":" not in registry:
+                    fail(
+                        f"{path.relative_to(REPO)}: image {image!r} has no "
+                        "registry; Docker will resolve it to docker.io"
+                    )
+                else:
+                    ok(f"{path.relative_to(REPO)}: {image}")
+
+
 def check_overlays() -> None:
     print(f"\n{DIM}3. kustomize overlays are internally consistent{RESET}")
 
@@ -281,6 +311,7 @@ def main() -> int:
     check_kubernetes(args.k8s_version)
     check_overlays()
     check_terraform()
+    check_images()
 
     print()
     if warnings:

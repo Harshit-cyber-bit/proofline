@@ -11,6 +11,11 @@ KUBE_CONTEXT ?= kind-$(CLUSTER_NAME)
 REGISTRY     ?= localhost:5001
 IMAGE        ?= $(REGISTRY)/proofline/app
 TAG          ?= dev
+
+# The name kustomize matches on when overriding the image. Must equal the image
+# written in k8s/base/deployment.yaml, or the override silently does nothing and
+# the base default deploys instead.
+IMAGE_NAME   ?= $(REGISTRY)/proofline/app
 ENV          ?= dev
 PROMETHEUS   ?= http://localhost:30090
 
@@ -137,7 +142,7 @@ build: check-docker ## Build and push the application image
 .PHONY: deploy
 deploy: ## Deploy to ENV (default dev), without probing
 	$(call banner,deploying to $(ENV))
-	@cd k8s/overlays/$(ENV) && kustomize edit set image proofline/app=$(IMAGE):$(TAG)
+	@cd k8s/overlays/$(ENV) && kustomize edit set image $(IMAGE_NAME)=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/$(ENV)
 	@$(KUBECTL) rollout status deployment/proofline -n $(NS) --timeout=300s
 
@@ -145,7 +150,7 @@ deploy: ## Deploy to ENV (default dev), without probing
 prove: ## Deploy to ENV and prove the rollout dropped no requests
 	$(call banner,deploying to $(ENV) with the prober running)
 	@mkdir -p reports/$(ENV)
-	@cd k8s/overlays/$(ENV) && kustomize edit set image proofline/app=$(IMAGE):$(TAG)
+	@cd k8s/overlays/$(ENV) && kustomize edit set image $(IMAGE_NAME)=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/$(ENV)
 	@./hack/probe-rollout.sh $(KUBE_CONTEXT) $(NS) $(PROBE_PORT) reports/$(ENV)/probe.json
 
@@ -156,7 +161,7 @@ break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 	@echo "If the prober passes this, the prober is broken -- that is the point."
 	@echo ""
 	@mkdir -p reports/broken
-	@cd k8s/overlays/broken && kustomize edit set image proofline/app=$(IMAGE):$(TAG)
+	@cd k8s/overlays/broken && kustomize edit set image $(IMAGE_NAME)=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/broken
 	@-./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) reports/broken/probe.json
 	@echo ""
@@ -165,6 +170,10 @@ break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 .PHONY: restore
 restore: ## Put dev back on the safe overlay (also run automatically after `make break`)
 	$(call banner,restoring the safe overlay)
+	@# Set the image here too. Skipping it was a real bug: on a freshly cloned
+	@# repo the overlay has no image override recorded, so the apply fell back to
+	@# the base default and the pod tried to pull from Docker Hub.
+	@cd k8s/overlays/dev && kustomize edit set image $(IMAGE_NAME)=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/dev
 	@# Cleanup, not measurement -- a stalled restore must report why rather than
 	@# just failing with "timed out waiting for the condition", which says
@@ -194,7 +203,12 @@ restore: ## Put dev back on the safe overlay (also run automatically after `make
 			echo "     scale down:  kubectl scale deploy/proofline -n proofline-dev --replicas=1"; \
 			echo "  2. A pod stuck Terminating from the broken overlay:"; \
 			echo "     kubectl delete pod -n proofline-dev --field-selector=status.phase!=Running --force"; \
-			echo "  3. Image no longer in the registry:  make build"; \
+			echo "  3. ImagePullBackOff above? The image is not in the local"; \
+			echo "     registry, or the override did not apply:"; \
+			echo "     make build"; \
+			echo "     kubectl get deploy proofline -n proofline-dev \\"; \
+			echo "       -o jsonpath='{.spec.template.spec.containers[0].image}'"; \
+			echo "     It must start with $(REGISTRY)/ -- a bare name means Docker Hub."; \
 			echo ""; \
 			echo "Then re-run:  make restore"; \
 			exit 1; \

@@ -14,5 +14,5 @@ commonLabels:
   app.kubernetes.io/managed-by: kustomize
 
 images:
-  - name: proofline/app
+  - name: localhost:5001/proofline/app
     newTag: dev

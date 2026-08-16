@@ -161,7 +161,7 @@ jobs:
       - name: Deploy
         run: |
           kubectl create namespace proofline-dev
-          cd k8s/overlays/dev && kustomize edit set image proofline/app=proofline/app:ci && cd -
+          cd k8s/overlays/dev && kustomize edit set image localhost:5001/proofline/app=proofline/app:ci && cd -
           kubectl apply -k k8s/overlays/dev
           kubectl rollout status deployment/proofline -n proofline-dev --timeout=300s
 

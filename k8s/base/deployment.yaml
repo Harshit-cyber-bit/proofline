@@ -68,7 +68,12 @@ spec:
 
       containers:
         - name: app
-          image: proofline/app:dev
+          # Registry-qualified on purpose. A bare `proofline/app` resolves to
+          # docker.io/proofline/app, so any code path that forgets to override
+          # the image quietly pulls from Docker Hub and fails with
+          # "pull access denied" -- which reads like an auth problem rather
+          # than a missing override. `make build` pushes here.
+          image: localhost:5001/proofline/app:dev
           imagePullPolicy: IfNotPresent
 
           ports:

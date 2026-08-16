@@ -216,6 +216,16 @@ cat reports/broken/probe.json | python3 -m json.tool
 > survived into the running pod (`kubectl get deploy proofline -n proofline-dev -o yaml`).
 > Scattered 5xx means the app. Whatever you find is the best paragraph in the blog.
 >
+> **`FailedGetResourceMetric` on the HPA is expected.** kind ships no
+> metrics-server, so the HorizontalPodAutoscaler cannot read CPU and does
+> nothing. It is left in because it is correct configuration for a real
+> cluster; install metrics-server if you want it to actually scale.
+>
+> **`ImagePullBackOff` with `docker.io/proofline/app`** means an apply used the
+> base default instead of your local registry. Check with
+> `kubectl get deploy proofline -n proofline-dev -o jsonpath='{.spec.template.spec.containers[0].image}'`
+> — it must start with `localhost:5001/`.
+>
 > **If `make break` PASSES:** the unsafe overlay did not apply. Confirm with
 > `kubectl get deploy proofline -n proofline-dev -o jsonpath='{.spec.strategy}'`
 > — `maxUnavailable` should be `100%`, not `0`.
