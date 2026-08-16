@@ -174,10 +174,12 @@ exactly inverted, and both looked plausible. It now hits a NodePort, which goes
 through kube-proxy and load balances across every ready endpoint. A measurement
 harness that does not share the production data path is measuring itself.
 
-**`maxUnavailable: 25%` of 2 replicas is 0.** Percentages round down for
-`maxUnavailable`. At two replicas the Kubernetes default is accidentally safe,
-and only starts dropping traffic at four or more — so the "unsafe" overlay in
-this repo has to say `maxUnavailable: 1` outright to misbehave at demo scale.
+**`maxUnavailable: 25%` of 2 replicas is 0.** Percentages round *down* for
+`maxUnavailable`. At two replicas the Kubernetes default is accidentally safe
+and only starts dropping traffic at four or more. And `maxUnavailable: 100%` on
+its own is still not enough — with any surge allowed the controller prefers to
+add a pod before removing one. The unsafe overlay needs `maxSurge: 0` as well,
+to force terminate-then-create.
 
 **Liveness and readiness are different questions.** Liveness asks "is this
 process wedged"; readiness asks "should traffic come here now". Wiring both to
