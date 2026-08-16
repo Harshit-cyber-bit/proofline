@@ -1,403 +1,361 @@
-# I wrote a test for "zero-downtime deployments". It failed three times before it worked.
+# I wrote a test for "zero-downtime deployments." Then I had to test the test.
 
-### Every SRE CV claims it. Almost nobody measures it. Here is what happened when I tried.
+"Zero-downtime rollouts" is on my CV. It's on almost every SRE's CV. For most of
+us it means: we used a rolling update, and nobody complained.
 
----
+Nobody complaining is a statement about how many people retried without
+mentioning it.
 
-I have "coordinated zero-downtime rollouts" on my CV. So does nearly every SRE
-I have ever interviewed alongside. It is one of those phrases that has quietly
-stopped meaning anything, because it describes an intention rather than a
-measurement.
+So I built something to check. A small service on Kubernetes, a prober that
+hammers it through an entire rollout and counts what happens, and an SLO gate
+that asks Prometheus whether the thing just deployed made the environment worse
+before anything gets promoted. Terraform underneath, Ansible for the fleet,
+Jenkins driving it. I called it proofline, because the point was for the
+pipeline to prove its claims rather than assert them.
 
-Here is what it usually means in practice: **we used a rolling update, and
-nobody complained.**
+Then I ran it, and spent a week finding out that almost every instrument I'd
+built was lying to me.
 
-Which is not the same thing. Nobody complaining is a statement about how many
-users retried without mentioning it.
+Not the service. The service was fine. **The bugs were in the things measuring
+the service** — and each one produced a confident, plausible, wrong number that
+I would have believed if I hadn't had a second measurement to check it against.
 
-So I built [proofline](https://github.com/YOUR_HANDLE/proofline) — a delivery
-pipeline where every deployment has to *prove* it was safe before the next
-environment will accept it. Terraform provisions it, Ansible configures it,
-Jenkins ships it, Kubernetes runs it. Ordinary so far. The part that isn't: a
-prober runs throughout every rollout, records every single request, and **one
-dropped connection fails the build.**
-
-The interesting part is not the finished thing. It is that my test was wrong
-three times, in three different ways, and each wrong version looked completely
-plausible.
+That turned out to be the actual lesson, and it's worth more than the project.
 
 ---
 
-## Part 1: what "zero-downtime" actually requires
+## 1. My prober was measuring itself
 
-A rolling update is not zero-downtime. It is zero-downtime *if*:
+First run. Safe configuration — proper `maxUnavailable`, a preStop hook, a
+readiness probe, a graceful drain. The prober reported **18 seconds of
+downtime.**
 
-- `maxUnavailable` is 0 — the default is 25%, which explicitly permits a quarter
-  of your capacity to be gone mid-rollout
-- readiness and liveness are **different endpoints with different meanings**
-- there is a preStop hook long enough for endpoint removal to propagate
-- `terminationGracePeriodSeconds` exceeds your application's drain window
-- the application actually drains on SIGTERM instead of exiting
-- `minReadySeconds` is long enough that a pod which passes one health check and
-  then dies does not let the rollout march onward
+Then I deliberately broke the deployment. Ripped out the preStop hook, set
+`maxUnavailable` to a value that should take pods down in bulk, dropped the
+grace period. Re-ran it.
 
-Miss any one and you drop connections on every deploy. Silently, because nothing
-is watching.
+**Zero dropped requests.**
 
-The one that catches people most often is the preStop hook, and the reason is
-worth understanding rather than memorising.
+Exactly inverted, and both numbers looked believable. The safe config could
+plausibly have a gap I hadn't accounted for; the broken one could plausibly be
+lucky on a small sample.
 
-When a pod is deleted, Kubernetes does two things **concurrently**: it sends
-SIGTERM to the container, and it removes the pod from the Endpoints object. That
-removal then propagates asynchronously to every kube-proxy and every ingress
-controller in the cluster.
+The prober reached the service with `kubectl port-forward svc/proofline`. That
+looks like it targets the Service — you name a Service, after all. It doesn't.
+**`port-forward` does not load-balance.** It resolves the Service to its
+endpoints, picks one pod, and tunnels to that pod.
 
-So there is a window — usually small, occasionally seconds — where the pod has
-begun shutting down but traffic is still being routed to it. If the process
-exits promptly on SIGTERM, everything arriving in that window is refused.
+So the safe rollout — which correctly replaced pods one at a time — killed the
+pod my tunnel was pinned to. The tunnel died. Eighteen seconds of "downtime"
+that no real user would have experienced, because kube-proxy would have sent
+them to the other pod.
 
-A `sleep 5` in a preStop hook looks like superstition. It is not. It is the pod
-holding still while the rest of the cluster catches up.
+And the broken rollout? It took everything down at once, the tunnel broke
+instantly, `port-forward` reconnected to a new pod, and the gap fell in the
+window where my prober was already erroring out and retrying. It scored
+perfectly.
 
-The application side matters just as much:
+The fix was to expose fixed NodePorts through kind's `extraPortMappings` and
+probe those, so traffic goes through kube-proxy — the path real traffic takes.
 
-```python
-def _drain(signum, _frame) -> None:
-    """Stop advertising readiness, then keep serving until the drain elapses."""
-    log.info("signal %s received: draining for %ss", signum, DRAIN_SECONDS)
-    _ready.clear()          # /readyz starts returning 503
-    READY.set(0)
-
-    def _exit() -> None:
-        time.sleep(DRAIN_SECONDS)   # but keep serving real traffic
-        os._exit(0)
-
-    threading.Thread(target=_exit, daemon=True).start()
-```
-
-Note what liveness does *not* do here. `/healthz` keeps returning 200 the whole
-time. A draining pod is not an unhealthy one, and wiring liveness to readiness
-means the kubelet restarts the pod mid-drain — turning a graceful shutdown back
-into dropped connections.
+**What I'd tell myself:** a test harness that shares a failure mode with the
+thing it's testing produces garbage that looks like data. The number was never
+"wrong" in an obvious way. It was wrong in the direction that made a broken
+config look good.
 
 ---
 
-## Part 2: the prober
+## 2. My "broken" configuration wasn't broken
 
-About 200 lines of standard-library Python. Standard library on purpose: it has
-to run inside a Jenkins agent with no `pip install` step, and a dependency there
-is a dependency on the worst possible day.
+Once the prober was honest, the broken overlay stopped dropping traffic. I had
+set `maxUnavailable: 25%`, which is the Kubernetes default and felt aggressive
+enough for a demo.
 
-It sends requests at a fixed rate, records every result, and classifies the
-failures:
+**`maxUnavailable` as a percentage rounds down.** At two replicas, 25% is 0.5,
+which rounds to **zero**. Kubernetes was refusing to take any pod down before a
+replacement was ready. My deliberately unsafe configuration was, accidentally,
+completely safe.
 
-```python
-CLASS_SERVER_ERROR = "server_error"      # it answered, badly
-CLASS_CONNECTION   = "connection_error"  # nothing answered at all
-CLASS_TIMEOUT      = "timeout"
-CLASS_CLIENT_ERROR = "client_error"      # not counted as a failure
-```
+I raised it to `1`. That dropped about one request in eighty — enough to fail a
+build, too subtle to be worth recording.
 
-That distinction matters more than it looks. A 5xx means the service is
-misbehaving. A connection error means the service was not *there* — which is
-what a bad rollout produces, and a categorically different thing to find in a
-report.
+It took `maxUnavailable: 100%` **and** `maxSurge: 0` to actually drop traffic.
+Both. With `maxSurge` at its default, Kubernetes will happily create replacement
+pods first and never leave you with nothing.
 
-4xx is deliberately not a failure. A client asking for something that does not
-exist is not an outage, and counting it means every scanner and stale bookmark
-eats your budget.
-
-It also tracks **consecutive** failures separately from the total. Ten scattered
-failures and ten in a row are very different events — the first is noise, the
-second is an outage — and a report that merges them hides the interesting half.
-
-Requests go out on a small thread pool rather than inline, so that one request
-hanging for its full timeout does not stall the schedule behind it. A prober
-whose own rate collapses during an outage under-reports exactly the event it
-exists to measure.
+I found this genuinely reassuring. The defaults are more protective than I'd
+assumed, and at small replica counts the rounding behaviour quietly makes them
+stricter. But it also means: if you've never measured your rollouts, you don't
+know whether your safety settings are doing anything, because the defaults may
+be carrying you.
 
 ---
 
-## Part 3: three ways I got it wrong
+## 3. The outage wasn't an error
 
-### Wrong #1 — the prober measured itself
+Finally, a genuinely broken rollout. Every pod down at once. I expected a wall
+of connection failures.
 
-The first working version reached the service like this:
+I got **2 errors out of 93 requests.** And a p99 latency of **2,067ms**, against
+a normal 15ms.
 
-```bash
-kubectl port-forward svc/proofline 18080:80
+When a Service has no ready endpoints, kube-proxy has nowhere to send the
+packet. It doesn't refuse the connection. The client's SYN goes unanswered, TCP
+retransmits, and when a pod finally becomes ready the connection completes.
+
+**The request succeeds. Two seconds later.**
+
+An availability dashboard reports that outage as 100% available. Every request
+returned 200. This is the single most useful thing I learned all week, and it
+reframes a category of incident: "the site was slow" and "the site was down" can
+be the same event seen through different instruments.
+
+The prober now fails on a p99 ceiling as well as on dropped requests. Without
+it, the most realistic outage in the whole project is invisible.
+
+---
+
+## 4. The SLO gate promoted a deployment the prober had just failed
+
+This is the one that made me rewrite how I think about verification.
+
+The pipeline has two independent checks. The prober measures from outside the
+cluster, over HTTP, like a user. The SLO gate queries Prometheus, which scrapes
+counters from inside the pods. Different data path, different failure modes —
+which is the whole reason to have both.
+
+I injected a 20% error rate and ran a deployment.
+
+- **Prober:** 1,200 requests, 257 failed, 78.58% available. **FAIL.**
+- **Gate:** 0.87% error ratio. **PASS. Promote to staging.**
+
+Two measurements of the same two minutes, 25× apart. And the one that was wrong
+was the gate — the component whose entire job is to stop bad deployments.
+
+Two causes, both design rather than typo.
+
+**The window was too long.** The gate averaged over ten minutes. The burn lasted
+two. A 20% error rate for two minutes out of ten comes to about 4% — and after
+the second cause below, under 1%. Under the threshold. Pass.
+
+What makes this properly embarrassing is that the *alert rules* in the same
+repository already did this correctly. They use multi-window multi-burn-rate
+alerting straight out of the Google SRE Workbook: a long window to establish the
+budget is really burning, a short one so the alert clears promptly. Standard
+practice, implemented, sitting in `slo/rules/`.
+
+The gate used a single window. So my alerting and my gate disagreed about the
+same incident — the alerts would have paged for a release the gate promoted — in
+a repo whose `slo.yaml` opens by claiming the two can't drift apart.
+
+**Health checks were counted as user traffic.** `/healthz`, `/readyz`,
+`/metrics` were all in the denominator. When I made the gate print its own
+breakdown, this is what came back:
+
+```
+requests by path over 10m:
+      3,169   200  /readyz     excluded from the SLI
+        759   200  /api/work
+        705   200  /healthz    excluded from the SLI
+        463   200  /metrics    excluded from the SLI
+        135   500  /api/work
+
+      5,229  total, of which 893 is user traffic
+      83% of it is health checks and metrics scrapes.
+      Counting those in the SLI divides every real error by 6.
 ```
 
-Reasonable. Wrong.
+A readiness probe every two seconds is a guaranteed 200 that no user ever made.
+It pads availability, and it pads it hardest when the service is small — which
+is exactly when you're watching a deploy.
 
-`kubectl port-forward` against a Service does **not** load-balance. It resolves
-the Service to *one* backing pod and tunnels to that pod. When a rollout
-replaced that pod, the tunnel died.
+There's a second-order version of this too: a pod draining correctly returns 503
+on `/readyz` while it shuts down. Counted in the SLI, a pod is charged error
+budget for terminating gracefully.
 
-The results were exactly inverted:
+After fixing both — paired 10m/2m windows, probe paths excluded — the same
+scenario gives:
 
-```
-make prove   (correct config)   → FAIL: 91 dropped, ~18.2s of "downtime"
-make break   (unsafe config)    → PASS: 0 dropped, 100% available
-```
+- **Long window:** 15.06%. **Short window:** 22.36%. **BLOCKED.**
+- Prober, measured completely independently, over the same two minutes: **21.4%.**
 
-The safe rollout "failed" because it replaced the pod my tunnel was pinned to.
-The unsafe one "passed" because its tunnel happened to survive. Both numbers
-looked completely believable. If I had only run the first one, I would have
-spent a day debugging a preStop hook that was working perfectly.
+Within a point of each other, from two entirely different measurement paths.
+That agreement is the strongest evidence in the project that either of them
+works.
 
-The fix was to expose each environment on a fixed NodePort and probe that
-instead. NodePort traffic goes through kube-proxy, which load-balances across
-every ready endpoint — the same path real traffic takes.
+`make burn` now **fails the build if the gate doesn't block.** A gate nobody has
+watched fail isn't a gate. A gate nobody has watched fail *correctly* is worse,
+because you've seen it produce output and mistaken that for it working.
 
-**A measurement harness that does not share the production data path is
-measuring itself.**
+---
 
-### Wrong #2 — the "broken" config wasn't broken
+## 5. `increase()` is fiction during a rollout
 
-I built a deliberately unsafe overlay so I could watch the check fail. A check
-that has never gone red in front of anyone is indistinguishable from a check
-that *cannot* go red.
+The breakdown above exposed something else. `/readyz` shows 3,169 requests over
+ten minutes. The probe fires every 2 seconds against 2 pods. Ten minutes allows
+about 600. `/metrics` shows 463 where a 15-second scrape interval allows about
+80.
 
-First attempt used the Kubernetes default:
+Both inflated by the same factor of five to six.
+
+`increase()` extrapolates each time series across the full window. A rollout
+replaces every pod, so a ten-minute window containing two deployments is full of
+series that only existed for ninety seconds, each stretched to fill ten minutes.
+The giveaway was there all along and I'd read past it: the counts came back as
+`28333.28`. A non-integer number of HTTP requests.
+
+This is why the fixed gate computes the ratio **inside Prometheus** rather than
+fetching two counts and dividing in Python. Numerator and denominator inflate
+together, so the ratio survives even though neither count means anything. The
+proof that it works is the 22.36% vs 21.4% agreement above — the ratio was
+right while the counts it came from were off by five.
+
+Any absolute request count taken from a window containing a deploy is not a
+number you should put in a report.
+
+---
+
+## 6. Green CI is a claim about your checker
+
+Halfway through, the project started teaching the same lesson from the other
+direction.
+
+`ansible-lint` passed at its **production** profile — the strictest setting —
+through three separate bugs that made the playbook completely non-functional.
+
+**The inventory didn't parse.** I'd written what looked like a Docker label
+filter:
 
 ```yaml
-strategy:
-  rollingUpdate:
-    maxUnavailable: 25%
+filters:
+  label:
+    - "proofline.role=app"
 ```
 
-It passed. Because **percentages round down for `maxUnavailable`**, and 25% of
-two replicas is 0.5, which rounds to zero. The Kubernetes default is
-accidentally safe at small replica counts, and only starts dropping traffic at
-four or more.
+That option isn't a Docker label filter. It's the generic inventory-filtering
+interface — a *list* of include/exclude Jinja conditions. My dict was never a
+valid shape for it.
 
-Second attempt, `maxUnavailable: 1`: one dropped request in eighty. A genuine
-failure — the build correctly went red, because zero means zero — but far too
-subtle to see.
+Here's the part worth remembering: **Ansible treats an unparseable inventory as
+a warning.** It logs it, falls back to the implicit localhost, and runs the
+playbook anyway. A configuration-management run aimed at three servers silently
+retargets the machine you launched it from. I got away with it because my play
+said `hosts: all`, which doesn't match implicit localhost. Change one line to
+`hosts: localhost` and that playbook configures your laptop and reports success.
 
-Third attempt, `maxUnavailable: 100%`: still only two drops. Because with any
-surge allowed, the deployment controller *prefers* to add a new pod before
-removing old ones.
+**The stdout callback wasn't installed.** `stdout_callback = yaml` lives in
+`community.general`, which the repo deliberately doesn't depend on. It fails
+*after* the play finishes, so it reads like the playbook broke.
 
-It needs both:
+**The first task failed with "No package matching 'curl' is available."** Which
+sounds like curl doesn't exist. It means the host has never fetched a package
+*list*. Container images clear `/var/lib/apt/lists` to stay small — and so does
+a freshly provisioned cloud instance, so this wasn't a container quirk. The role
+was broken for real hosts too.
 
-```yaml
-maxUnavailable: 100%
-maxSurge: 0          # forces terminate-then-create
-```
+None of these are things a linter can catch. It checks task style and syntax. It
+doesn't know which collections are installed, doesn't validate an inventory
+plugin's options against the plugin, and can't know anything about the target.
 
-Three attempts to write a configuration bad enough to break a service. That is
-a strange and slightly reassuring thing to learn about Kubernetes defaults.
-
-### Wrong #3 — the outage wasn't an error
-
-With every pod going down at once, I expected carnage. I got this:
-
-```
-FAIL  93 requests, 2 dropped
-  "availability_pct": 97.85,
-  "latency_p50_ms": 3.91,
-  "latency_p95_ms": 1027.57,
-  "latency_p99_ms": 2067.44,
-```
-
-Two errors — and a **p99 of two seconds**, against 14ms on a healthy rollout.
-
-Here is why. When a Service has no ready endpoints, kube-proxy has nowhere to
-send the packet. The client's TCP SYN is retried until an endpoint appears, so
-the request eventually **succeeds** — one or two seconds later.
-
-An outage does not always look like an error. Sometimes it looks like everything
-being slow, and an error-only check calls that a near miss.
-
-The prober already computed p99. It just was not scoring it. Now it fails on
-both:
-
-```
-FAIL  93 requests, 2 dropped
-      - 2 request(s) failed (allowed 0): 2 connection_error
-      - 2 consecutive failures (~0.4s of downtime)
-      - p99 latency 2067.44ms exceeded 1000ms
-```
-
-This is the finding I would not have got from reading documentation. Two seconds
-of every request hanging is exactly the shape of "the site froze during the
-deploy" — a real user complaint that an availability dashboard reports as 100%.
+**Linted is not runs.** Same lesson as the SLO gate, arriving from a completely
+different direction, and I'd have said I already knew it.
 
 ---
 
-## Part 4: the numbers
+## 7. Jenkins, and five more
 
-Same service. Same cluster. Same command. The only difference is configuration.
+Before running the Jenkins stage I read the Jenkinsfile. It still probed through
+`kubectl port-forward` — with a comment explaining that this was how you reach
+the Service rather than a single pod.
 
-| | safe overlay | unsafe overlay |
-|---|---|---|
-| requests | 260 | 93 |
-| dropped | **0** | 2 |
-| availability | 100% | 97.85% |
-| p50 | 2.83ms | 3.91ms |
-| p95 | 5.94ms | 1027ms |
-| **p99** | **14.64ms** | **2067ms** |
-| verdict | **PASS** | **FAIL** |
+The exact false belief from section 1, preserved in a comment, in the same repo
+whose headline finding is that it's wrong. I'd fixed the Makefile days earlier
+and never looked at the pipeline.
 
-Two commands:
+Four more in the same file, all found by reading rather than running:
 
-```bash
-make prove   # deploy with the safety settings, prove nothing dropped
-make break   # deploy without them, watch that proof fail
+- `kustomize edit set image proofline/app=...` matched nothing, because the base
+  image is registry-qualified. The override would silently do nothing and the
+  base default would deploy.
+- `KUBECONFIG` pointed at a path nothing writes.
+- `PROMETHEUS` was `http://localhost:30090` — from inside the Jenkins container,
+  that's the Jenkins container.
+- Every plugin in `plugins.txt` was pinned to `:latest` against a base image
+  from a year earlier. The build died in fifty lines of "requires a greater
+  version of Jenkins." Nothing in the repo had changed; plugin maintainers had
+  shipped releases. Meanwhile `terraform/local/versions.tf` opens by explaining
+  exactly why you pin your dependencies — written the same afternoon.
+
+Then two the container found for me.
+
+A single wrong method name in the Job DSL seed job — mixing the classic API
+(`git { remote { url } }`) with the dynamic one (`scmGit { userRemoteConfigs
+{ ... } }`) — didn't produce a missing job. Configuration-as-code turns a failed
+job script into `ConfigurationAsCodeBootFailure`, so **Jenkins doesn't start at
+all.** One typo in a job definition takes down the controller. Nobody mentions
+that in the tutorials.
+
+And my favourite of the entire project. `kubectl get nodes` inside the container
+returned:
+
 ```
+couldn't get current server API group list:
+<html><head><meta http-equiv='refresh' content='1;url=/login?from=%2Fapi'/>
+...Authentication required...
+```
+
+An HTML login page. With no kubeconfig, **kubectl falls back to its legacy
+default of `http://localhost:8080`** — and inside that container, port 8080 is
+Jenkins. So kubectl was querying Jenkins, Jenkins was politely asking it to log
+in, and kubectl was reporting a Kubernetes API failure about a cluster that was
+entirely healthy.
+
+The last bug of the week was in a measuring instrument too. The `curl` command I
+was using to check whether the Jenkins job existed returned nothing at all —
+because `[` and `]` are URL-globbing metacharacters and curl was rejecting the
+URL before sending it.
 
 ---
 
-## Part 5: the second gate
+## What I actually took away
 
-Dropping no traffic during the rollout is necessary, not sufficient. The deploy
-could still be quietly worse than what it replaced.
+Fifteen or so real bugs. **Not one of them was in the application.** Every
+single one was in something built to observe, validate, or gate the
+application — the prober, the gate, the linter, the inventory, the pipeline, the
+diagnostic scripts I wrote to debug the other bugs.
 
-So after each rollout the pipeline asks Prometheus one question: **did what I
-just shipped make this environment worse?** Over a ten-minute window it compares
-the error ratio against the objective in `slo/slo.yaml` and blocks promotion if:
+Three things I'd say to anyone building this kind of thing:
 
-- too many errors, or
-- **not enough traffic to judge**, or
-- **Prometheus returned nothing at all**
+**Two independent measurements, or none.** Almost every bug here was caught by
+one instrument disagreeing with another. The port-forward bug was caught by
+results being *inverted* — a single measurement would have been believed. The
+gate bug was caught by the prober. If you have one number and nothing to check
+it against, you don't have a measurement, you have a claim with a decimal point.
 
-Those last two are the ones that matter, and both are ways a gate quietly stops
-being a gate.
+**Make your tools fail loudly, then check that they do.** Ansible turns a broken
+inventory into a warning. `NaN > 0.01` is `False` in every language, so an
+unguarded NaN sails through a threshold check and passes the build. An empty
+Prometheus vector divided by anything is empty — so a deployment with *zero*
+errors came back as "no data" and got blocked, until I added `or vector(0)`. The
+default behaviour of most tooling under "I don't know" is to proceed.
 
-A gate that passes on silence is decoration. Ten requests and zero errors is not
-evidence of a healthy deployment; it is evidence that nobody used it.
+**Your verification needs verification.** This is the recursive bit and there's
+no bottom to it. I wrote a diagnostic script to work out why some containers
+wouldn't boot; it reported "exits" and threw away the exit code and logs — the
+same mistake the containers were making. I rewrote it. The second version had a
+hard gate in the middle that aborted before the useful part. Then I wrote a
+script to check the Ansible inventory, and had to test *that* against a fake
+`ansible-inventory` before I trusted it.
 
-And the nastier one:
-
-```python
-value = float(result[0]["value"][1])
-# A ratio with no denominator comes back as NaN. Treating NaN as a number
-# would make `NaN > threshold` evaluate False and quietly pass the gate.
-if value != value:
-    return None
-```
-
-If the scrape is broken, or the job label is wrong, or the deployment never
-became ready, a `sum(rate(...))` over an empty series returns `NaN`. **Every
-comparison against NaN is false.** So `if error_ratio > max_error_ratio: block()`
-passes — cleanly, precisely when your monitoring is broken.
-
-The same idea appears in the prober. Early in development it died after two
-requests because the port-forward was not up yet, recorded both as successes,
-and reported 100% availability. Verdict: pass.
-
-```python
-if report.total < min_samples:
-    reasons.append(
-        f"only {report.total} probe(s) recorded, need at least {min_samples}; "
-        "the prober did not run long enough to prove anything"
-    )
-```
-
-Too few samples is a **failure**, not a pass. I would guess a meaningful share
-of "we have automated verification" setups have this bug and nobody has noticed,
-because the failure mode is silence.
+You stop when the cost of another layer exceeds the risk. But you should stop
+deliberately, knowing you've stopped, rather than because the last thing you
+built printed something green.
 
 ---
 
-## Part 6: every layer gets checked
+The repo runs on a laptop with kind and Docker — no cloud account, about forty
+minutes end to end. `make prove` and `make break` are the two commands worth
+watching: same service, same cluster, deployed twice, and the only difference is
+configuration.
 
-Most portfolio pipelines have no tests at all. This one is checked at each
-layer, and all of it runs in CI without a cluster or a cloud account:
-
-| Layer | Check | Catches |
-|---|---|---|
-| Kubernetes | Manifests validated against **upstream JSON schemas**, strict mode | Typos and misplaced fields |
-| Kustomize | Overlay references, patch targets, patch paths | Patches that apply to nothing |
-| Kubernetes | Every image must name a registry | Silent falls back to Docker Hub |
-| Terraform | HCL parsed; every variable described; every provider pinned | Drift between the plan you reviewed and the plan that runs |
-| Ansible | `ansible-lint` at the **production** profile | Non-idempotent and unsafe tasks |
-| Ansible | Playbook run twice; the second run must change nothing | Roles that only work the first time |
-| Python | 36 unit tests over the prober and gate logic | The gates themselves being wrong |
-
-The Kubernetes one deserves a moment. **`kubectl apply --dry-run=client` does
-not catch a misplaced field.** Write `readinesProbe` — one missing `s` — and it
-applies cleanly. Your pod has no readiness check. You find out during a rollout,
-at an hour of the API server's choosing.
-
-Validating against the upstream Kubernetes JSON schemas in strict mode catches
-it in about a second:
-
-```
-FAIL deployment.yaml Deployment: spec.template.spec.containers.0:
-     Additional properties are not allowed ('readinesProbe' was unexpected)
-```
-
-Two of those rows exist *because* something bit me. The registry check went in
-after a pod spent twelve minutes in `ImagePullBackOff` trying to fetch
-`docker.io/proofline/app` — because a bare image name silently resolves to
-Docker Hub, and the error reads like an auth problem rather than a missing
-prefix. The kustomize patch-path check went in after kustomize refused a patch
-file that lived one directory up.
-
-Every failure on my machine became a permanent check in the repo. That is the
-part I would defend hardest in an interview.
-
----
-
-## Part 7: the same ideas have different names on EC2
-
-There is an AWS reference stack in the repo too — VPC across multiple AZs,
-public ALB, private auto scaling group, ECR with immutable tags. CI validates
-it; nothing applies it automatically, because applying it costs about $80/month.
-
-The pleasing part was discovering the settings map one to one:
-
-| Kubernetes | AWS |
-|---|---|
-| preStop hook | Target group `deregistration_delay` |
-| `maxUnavailable: 0` | ASG instance refresh, `min_healthy_percentage = 100` |
-| readinessProbe | ELB health check — **not** the EC2 health check |
-| `terminationGracePeriodSeconds` | ASG lifecycle hook timeout |
-
-The EC2 one people get wrong is health check type. An EC2 health check notices a
-dead *instance*. It cannot notice an instance whose application stopped
-answering — which is the failure that actually happens.
-`health_check_type = "ELB"` is a one-line change that turns a fleet of
-healthy-looking zombies into one that heals.
-
----
-
-## Try it
-
-```bash
-git clone https://github.com/YOUR_HANDLE/proofline
-cd proofline
-make up      # kind cluster, registry, monitoring, app -- all local, all free
-make prove   # deploy and prove no request was dropped
-make break   # deploy without the safety settings and watch that proof fail
-```
-
-No cloud account needed. There is a Windows bootstrap under `hack/windows/` that
-installs WSL2, Docker Engine and the whole toolchain, because that is what I run
-on.
-
----
-
-## What I would say about it in an interview
-
-Not that it proves zero-downtime in production. It proves it for one service, on
-one cluster, under synthetic load, at a 0.2-second probe interval. That is a
-real sentence with real boundaries.
-
-What I did not expect was how much I would learn from making the check strict.
-Every "obviously fine" default I had absorbed turned out to have a specific
-failure mode, and the only reason I found them is that something went red when
-they were wrong.
-
-Three times my test was confidently, plausibly wrong. That is the actual lesson,
-and it applies well beyond deployments: **a check you have never watched fail is
-not a check.** It is a comfort blanket with a green tick on it.
-
----
-
-*I'm a Site Reliability Engineer working on monitoring, incident response and
-CI/CD. I write about the infrastructure things I break on purpose so I
-understand them.*
+One passes. One doesn't. That's the whole idea.
