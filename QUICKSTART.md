@@ -146,8 +146,8 @@ make deploy        # deploy to dev
 kubectl --context kind-proofline get pods -n proofline-dev
 # expect 2/2 Running
 
-kubectl --context kind-proofline port-forward -n proofline-dev svc/proofline 8080:80 &
-curl -s localhost:8080 | python3 -m json.tool
+# The service is on a NodePort that kind maps to the host -- no port-forward.
+curl -s localhost:30080 | python3 -m json.tool
 # {"service": "proofline-demo", "version": "dev", "ready": true, ...}
 ```
 
@@ -187,8 +187,12 @@ Then the other half:
 make break
 ```
 
-Same service, safety settings removed — `maxUnavailable: 25%`, no preStop hook,
+Same service, safety settings removed — `maxUnavailable: 1`, no preStop hook,
 no drain, 60-second readiness period.
+
+(It says `1` and not the Kubernetes default of `25%` for a reason: 25% of two
+replicas rounds *down* to zero, so the default is accidentally safe at this
+scale and the overlay proved nothing.)
 
 **Expect FAIL**, with consecutive `connection_error` failures and an estimated
 downtime in seconds. It restores the safe overlay afterwards.
@@ -209,7 +213,7 @@ cat reports/broken/probe.json | python3 -m json.tool
 >
 > **If `make break` PASSES:** the unsafe overlay did not apply. Confirm with
 > `kubectl get deploy proofline -n proofline-dev -o jsonpath='{.spec.strategy}'`
-> — it should show `25%`, not `0`.
+> — `maxUnavailable` should be `1`, not `0`.
 
 ---
 
