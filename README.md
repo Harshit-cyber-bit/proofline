@@ -1,5 +1,6 @@
 ![ci](https://github.com/Harshit-cyber-bit/proofline/actions/workflows/ci.yaml/badge.svg)
-![Uploading proofline.gif…]()
+
+<img width="2565" height="1484" alt="proofline" src="https://github.com/user-attachments/assets/23b8173e-27b2-4c65-8954-adf4ba11f22d" />
 
 # proofline
 
