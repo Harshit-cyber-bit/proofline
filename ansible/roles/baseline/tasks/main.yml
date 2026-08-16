@@ -11,8 +11,8 @@
 #
 # ansible.builtin.package cannot do this: refreshing a cache is package-manager
 # specific and the generic module deliberately has no option for it. So this is
-# split by ansible_pkg_mgr, which is also what makes the role work on both the
-# Debian-family fleet and an RPM host.
+# split by ansible_facts['pkg_mgr'], which is also what makes the role work on
+# both the Debian-family fleet and an RPM host.
 #
 # changed_when: false because fetching a package list is not a change to the
 # host's configuration. Left as-is it would report changed on every run and the
@@ -22,7 +22,7 @@
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
-  when: ansible_pkg_mgr == 'apt'
+  when: ansible_facts['pkg_mgr'] == 'apt'
   changed_when: false
   register: baseline_apt_cache
   retries: 3
@@ -32,7 +32,7 @@
 - name: Refresh the package cache (dnf/yum)
   ansible.builtin.dnf:
     update_cache: true
-  when: ansible_pkg_mgr in ['dnf', 'dnf5', 'yum']
+  when: ansible_facts['pkg_mgr'] in ['dnf', 'dnf5', 'yum']
   changed_when: false
   register: baseline_dnf_cache
   retries: 3
