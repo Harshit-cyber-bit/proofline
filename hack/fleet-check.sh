@@ -109,12 +109,34 @@ else
     exit 1
 fi
 
-if out=$(docker run --rm "$IMAGE" /lib/systemd/systemd --version 2>&1 | head -1); then
+# Does the binary exist, and where. `ls` rather than running it, because
+# running systemd is precisely the thing that is failing and this question
+# should be answerable without it.
+out=$(docker run --rm "$IMAGE" ls -lL /lib/systemd/systemd 2>&1 | head -2)
+code=$?
+if [[ $code -eq 0 ]]; then
+    echo "    ${GREEN}yes${RESET}   /lib/systemd/systemd exists"
+    printf '%s' "$DIM"; printf '%s\n' "$out" | indent "          "; printf '%s' "$RESET"
+else
+    echo "    ${RED}no${RESET}    /lib/systemd/systemd is not in the image (exit ${code})"
+    printf '%s' "$DIM"; printf '%s\n' "$out" | indent "          "; printf '%s' "$RESET"
+    echo ""
+    echo "    Look for it:  docker run --rm $IMAGE sh -c 'command -v systemd; ls /sbin/init'"
+    exit 1
+fi
+
+# Whether it will report its own version. Informative, never fatal: the boot
+# attempts below are the real test, and an earlier version of this script
+# aborted here and never reached them -- which taught me nothing except that a
+# diagnostic with a hard gate in the middle is not a diagnostic.
+out=$(docker run --rm "$IMAGE" /lib/systemd/systemd --version 2>&1 | head -1)
+code=$?
+if [[ $code -eq 0 && -n "${out//[[:space:]]/}" ]]; then
     echo "    ${GREEN}yes${RESET}   ${out}"
 else
-    echo "    ${RED}no${RESET}    /lib/systemd/systemd is not runnable in this image:"
-    printf '%s' "$DIM"; printf '%s\n' "$out" | indent "          "; printf '%s' "$RESET"
-    exit 1
+    echo "    ${YELLOW}odd${RESET}   'systemd --version' exited ${code}${out:+ saying: $out}"
+    echo "          Not necessarily fatal -- systemd as PID 1 in a container can"
+    echo "          fail before it has anywhere to print to. Continuing."
 fi
 
 # ------------------------------------------------------- boot, several ways
@@ -165,16 +187,16 @@ echo ""
 # the one Docker already set up is what breaks it.
 try_boot "privileged only" \
     --privileged
-try_boot "privileged + /sys/fs/cgroup" \
+try_boot "privileged + cgroup mount" \
     --privileged -v /sys/fs/cgroup:/sys/fs/cgroup
 try_boot "privileged + cgroupns=host" \
     --privileged --cgroupns=host
-try_boot "privileged + cgroupns=host + cgroup mount" \
+try_boot "cgroupns=host + cgroup mount" \
     --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup
-try_boot "... + tmpfs on /run and /tmp" \
+try_boot "... + tmpfs /run /run/lock /tmp" \
     --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup \
     --tmpfs /run --tmpfs /run/lock --tmpfs /tmp
-try_boot "... + container=docker" \
+try_boot "... + container=docker env" \
     --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup \
     --tmpfs /run --tmpfs /run/lock --tmpfs /tmp -e container=docker
 
@@ -184,12 +206,104 @@ if [[ -n "$WINNER" ]]; then
     section "verdict"
     echo "    ${GREEN}${WINNER}${RESET} boots."
     echo ""
-    echo "    Set the matching options on docker_container \"fleet\" in"
-    echo "    terraform/local/main.tf, then:"
+    echo "    Put this on docker_container \"fleet\" in terraform/local/main.tf:"
+    echo ""
+    case "$WINNER" in
+        "privileged only")
+            cat <<'HCL'
+          privileged = true
+          # and DELETE the volumes { host_path = "/sys/fs/cgroup" ... } block --
+          # bind-mounting the host's cgroup tree over the one Docker already
+          # set up is what was breaking it.
+HCL
+            ;;
+        "privileged + cgroupns=host")
+            cat <<'HCL'
+          privileged    = true
+          cgroupns_mode = "host"
+          # and DELETE the volumes { host_path = "/sys/fs/cgroup" ... } block.
+HCL
+            ;;
+        "privileged + cgroup mount"|"cgroupns=host + cgroup mount")
+            echo "          (this is what terraform/local/main.tf already sets)"
+            echo ""
+            echo "    So the running containers differ from the code. Compare:"
+            echo ""
+            echo "        docker inspect $first --format '{{json .HostConfig}}' | python3 -m json.tool"
+            echo ""
+            echo "    then force a rebuild:"
+            echo ""
+            echo "        cd terraform/local && terraform apply -replace='docker_container.fleet[0]' \\"
+            echo "          -replace='docker_container.fleet[1]' -replace='docker_container.fleet[2]' -auto-approve"
+            exit 0
+            ;;
+        *tmpfs*|*container=docker*)
+            cat <<'HCL'
+          privileged    = true
+          cgroupns_mode = "host"
+
+          volumes {
+            host_path      = "/sys/fs/cgroup"
+            container_path = "/sys/fs/cgroup"
+            read_only      = false
+          }
+
+          # systemd needs these writable and its own, not inherited from the
+          # image layer.
+          mounts {
+            target = "/run"
+            type   = "tmpfs"
+          }
+
+          mounts {
+            target = "/run/lock"
+            type   = "tmpfs"
+          }
+
+          mounts {
+            target = "/tmp"
+            type   = "tmpfs"
+          }
+HCL
+            if [[ "$WINNER" == *"container=docker"* ]]; then
+                echo ""
+                echo '          env = ["container=docker"]'
+            fi
+            ;;
+    esac
+    echo ""
+    echo "    Then:"
     echo ""
     echo "        cd terraform/local && terraform apply -auto-approve"
-    echo "        cd ../.. && ./hack/fleet-check.sh"
+    echo "        cd ../.. && make fleet-check && make ansible"
     exit 0
+fi
+
+# `docker logs` on a container that died in its first half-second is often
+# empty: the log driver never saw anything. Attaching to the foreground does
+# see it. This is the attempt most likely to produce systemd's actual
+# complaint, so it runs last and its output is printed whole.
+section "attaching to the foreground, to catch what the log driver missed"
+cleanup
+foreground=$(timeout 12 docker run --rm --name "$TEST_NAME" \
+    --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup \
+    "$IMAGE" /lib/systemd/systemd 2>&1 | head -40)
+if [[ -n "${foreground//[[:space:]]/}" ]]; then
+    printf '%s' "$DIM"; printf '%s\n' "$foreground" | indent "      "; printf '%s' "$RESET"
+else
+    echo "      (silent here too)"
+fi
+
+# And the other entry point, in case this image expects it.
+cleanup
+section "the same, via /sbin/init"
+init_out=$(timeout 12 docker run --rm --name "$TEST_NAME" \
+    --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup \
+    "$IMAGE" /sbin/init 2>&1 | head -40)
+if [[ -n "${init_out//[[:space:]]/}" ]]; then
+    printf '%s' "$DIM"; printf '%s\n' "$init_out" | indent "      "; printf '%s' "$RESET"
+else
+    echo "      (silent)"
 fi
 
 section "what each attempt actually said"
@@ -215,7 +329,7 @@ if [[ $HOST_HAS_SYSTEMD -eq 0 ]]; then
     echo ""
     echo "  On WSL2, turn systemd on:"
     echo ""
-    printf "      printf '[boot]\\nsystemd=true\\n' | sudo tee -a /etc/wsl.conf\n"
+    printf '%s\n' "      printf '[boot]\\nsystemd=true\\n' | sudo tee -a /etc/wsl.conf"
     echo ""
     echo "  then from PowerShell, close every WSL window and run:"
     echo ""
