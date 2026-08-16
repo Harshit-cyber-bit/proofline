@@ -122,9 +122,26 @@ terraform-local: ## Provision the local fleet and monitoring stack with Terrafor
 	@$(KUBECTL) apply -f slo/rules/proofline-slo-rules.yaml
 	@$(KUBECTL) apply -k k8s/monitoring
 
+.PHONY: fleet-check
+fleet-check: ## Diagnose why the Ansible fleet containers will not boot
+	$(call banner,fleet: why systemd is not staying up)
+	@./hack/fleet-check.sh
+
 .PHONY: ansible
 ansible: ## Configure the server fleet with Ansible
 	$(call banner,ansible: configuring the fleet)
+	@# Fail here with something useful rather than inside the dynamic inventory,
+	@# which reports a dead fleet as "no hosts matched" -- true, and useless.
+	@running=$$(docker ps --filter name=proofline-app --filter status=running -q | wc -l); \
+		if [ "$$running" -eq 0 ]; then \
+			echo "  $(RED)no fleet containers are running.$(RESET)"; \
+			echo "  The dynamic inventory would report 'no hosts matched', which is"; \
+			echo "  true and tells you nothing. Find out why instead:"; \
+			echo ""; \
+			echo "      make fleet-check"; \
+			exit 1; \
+		fi; \
+		echo "    $$running fleet host(s) up"
 	@cd ansible && ansible-galaxy collection install -r requirements.yml
 	@cd ansible && ansible-playbook site.yml
 

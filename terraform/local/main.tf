@@ -32,9 +32,21 @@ resource "docker_container" "fleet" {
   # playbooks only work on containers, which defeats the point of writing them.
   command = ["/lib/systemd/systemd"]
 
-  # systemd in a container needs both of these. This is a local demo fleet on a
-  # throwaway kind cluster, not a pattern to copy into production.
+  # systemd in a container needs all three of these. This is a local demo fleet
+  # on a throwaway kind cluster, not a pattern to copy into production.
   privileged = true
+
+  # The one that is easy to miss, and the reason this fleet spent an evening in
+  # a restart loop exiting 255 with an empty `docker logs`. On cgroup v2 -- the
+  # default on any current distribution, and inside WSL2 -- Docker gives each
+  # container its own cgroup namespace. systemd cannot write the controllers it
+  # needs into a namespace it does not own, so it dies before it has a console
+  # to say so on. Sharing the host's namespace is what Molecule does to test
+  # roles in containers, for exactly this reason.
+  #
+  # ./hack/fleet-check.sh boots the image by hand with and without it, so the
+  # diagnosis is a measurement rather than a guess.
+  cgroupns_mode = "host"
 
   volumes {
     host_path      = "/sys/fs/cgroup"
