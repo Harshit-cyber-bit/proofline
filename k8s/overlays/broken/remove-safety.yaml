@@ -7,12 +7,21 @@ spec:
   # Each of these drops requests.
   strategy:
     rollingUpdate:
-      # An absolute 1, not the default 25%. With 2 replicas, 25% rounds DOWN to
-      # zero -- so the Kubernetes default is accidentally safe at small replica
-      # counts and this overlay proved nothing. It only starts dropping traffic
-      # at 4+ replicas, which is exactly the sort of thing you discover in
-      # production rather than in a demo.
-      maxUnavailable: 1
+      # 100%: every pod may go down at once. This is what people reach for when
+      # they want "faster deploys" and have not thought about what unavailable
+      # means.
+      #
+      # Two weaker settings were tried here first and are worth knowing about:
+      #
+      #   25% (the Kubernetes default) -- rounds DOWN for maxUnavailable, so at
+      #   two replicas it is 0 and the default is accidentally safe. It only
+      #   starts dropping traffic at four or more replicas.
+      #
+      #   1 -- takes one of two pods down, so the survivor keeps serving and
+      #   only in-flight requests to the dying pod fail. Real, but small: about
+      #   one dropped request in eighty. Enough to fail the build (zero means
+      #   zero) and too subtle to see in a demo.
+      maxUnavailable: 100%
       maxSurge: 1
   # No soak before a pod counts as available.
   minReadySeconds: 0

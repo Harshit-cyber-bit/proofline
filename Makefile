@@ -152,7 +152,7 @@ prove: ## Deploy to ENV and prove the rollout dropped no requests
 .PHONY: break
 break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 	$(call banner,deploying the deliberately unsafe overlay)
-	@echo "maxUnavailable 1, no preStop hook, no drain, 60s readiness period."
+	@echo "maxUnavailable 100%, no preStop hook, no drain, 60s readiness period."
 	@echo "If the prober passes this, the prober is broken -- that is the point."
 	@echo ""
 	@mkdir -p reports/broken
@@ -160,9 +160,46 @@ break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 	@$(KUBECTL) apply -k k8s/overlays/broken
 	@-./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) reports/broken/probe.json
 	@echo ""
-	@echo "$(BOLD)restoring the safe overlay$(RESET)"
+	@$(MAKE) --no-print-directory restore
+
+.PHONY: restore
+restore: ## Put dev back on the safe overlay (also run automatically after `make break`)
+	$(call banner,restoring the safe overlay)
 	@$(KUBECTL) apply -k k8s/overlays/dev
-	@$(KUBECTL) rollout status deployment/proofline -n proofline-dev --timeout=300s
+	@# Cleanup, not measurement -- a stalled restore must report why rather than
+	@# just failing with "timed out waiting for the condition", which says
+	@# nothing about the cause.
+	@$(KUBECTL) rollout status deployment/proofline -n proofline-dev --timeout=180s \
+		|| { \
+			echo ""; \
+			echo "$(BOLD)The restore did not converge. Diagnosis:$(RESET)"; \
+			echo ""; \
+			echo "--- pods ---"; \
+			$(KUBECTL) get pods -n proofline-dev -o wide; \
+			echo ""; \
+			echo "--- not-ready containers ---"; \
+			$(KUBECTL) get pods -n proofline-dev \
+				-o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.containerStatuses[*]}ready={.ready} restarts={.restartCount} {.state}{end}{"\n"}{end}'; \
+			echo ""; \
+			echo "--- recent events ---"; \
+			$(KUBECTL) get events -n proofline-dev \
+				--sort-by=.lastTimestamp | tail -20; \
+			echo ""; \
+			echo "--- rollout ---"; \
+			$(KUBECTL) describe deployment proofline -n proofline-dev \
+				| sed -n '/Conditions:/,/Events:/p'; \
+			echo ""; \
+			echo "Most likely causes, in order:"; \
+			echo "  1. Not enough memory for surge pods. Raise WslMemory, or"; \
+			echo "     scale down:  kubectl scale deploy/proofline -n proofline-dev --replicas=1"; \
+			echo "  2. A pod stuck Terminating from the broken overlay:"; \
+			echo "     kubectl delete pod -n proofline-dev --field-selector=status.phase!=Running --force"; \
+			echo "  3. Image no longer in the registry:  make build"; \
+			echo ""; \
+			echo "Then re-run:  make restore"; \
+			exit 1; \
+		}
+	@echo "    dev is back on the safe overlay"
 
 .PHONY: gate
 gate: ## Ask the SLO gate whether ENV earned promotion

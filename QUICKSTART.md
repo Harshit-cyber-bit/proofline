@@ -187,12 +187,17 @@ Then the other half:
 make break
 ```
 
-Same service, safety settings removed — `maxUnavailable: 1`, no preStop hook,
-no drain, 60-second readiness period.
+Same service, safety settings removed — `maxUnavailable: 100%`, no preStop
+hook, no drain, 60-second readiness period.
 
-(It says `1` and not the Kubernetes default of `25%` for a reason: 25% of two
-replicas rounds *down* to zero, so the default is accidentally safe at this
-scale and the overlay proved nothing.)
+Two milder settings were tried first and are documented in the overlay: the
+Kubernetes default of `25%` rounds *down* to zero at two replicas, so it is
+accidentally safe; and `1` drops roughly one request in eighty — enough to fail
+the build, too subtle to see on video.
+
+Afterwards it restores the safe overlay. If that stalls, it prints pod status,
+events and the likely cause rather than just timing out; `make restore` re-runs
+just that step.
 
 **Expect FAIL**, with consecutive `connection_error` failures and an estimated
 downtime in seconds. It restores the safe overlay afterwards.
