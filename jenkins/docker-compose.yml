@@ -20,6 +20,20 @@ services:
       JAVA_OPTS: -Djenkins.install.runSetupWizard=false
       CASC_JENKINS_CONFIG: /var/jenkins_home/casc.yaml
       JENKINS_ADMIN_PASSWORD: proofline
+
+      # Set here rather than only in the Jenkinsfile, because otherwise every
+      # process that is not a pipeline run -- `docker exec ... kubectl`, a shell
+      # in the container, anything you reach for while debugging -- has no
+      # kubeconfig at all.
+      #
+      # And kubectl's behaviour with no kubeconfig is genuinely hostile: it
+      # falls back to its legacy default of http://localhost:8080. Inside this
+      # container port 8080 is Jenkins. So `kubectl get nodes` queries Jenkins,
+      # Jenkins answers with an HTML login page, and kubectl reports
+      # "couldn't get current server API group list" followed by a wall of
+      # markup. Nothing in that error suggests a missing kubeconfig, and the
+      # cluster it appears to be failing to reach is perfectly healthy.
+      KUBECONFIG: /var/jenkins_home/.kube/config
     volumes:
       - jenkins_home:/var/jenkins_home
       - ./casc.yaml:/var/jenkins_home/casc.yaml:ro
