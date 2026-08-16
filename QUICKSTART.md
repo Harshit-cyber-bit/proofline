@@ -200,7 +200,7 @@ events and the likely cause rather than just timing out; `make restore` re-runs
 just that step.
 
 **Expect FAIL**, with consecutive `connection_error` failures and an estimated
-downtime in seconds. It restores the safe overlay afterwards.
+downtime in seconds.
 
 Run them back to back in one terminal. Green then red, about fifteen seconds of
 video, and that is the LinkedIn post.
@@ -218,7 +218,7 @@ cat reports/broken/probe.json | python3 -m json.tool
 >
 > **If `make break` PASSES:** the unsafe overlay did not apply. Confirm with
 > `kubectl get deploy proofline -n proofline-dev -o jsonpath='{.spec.strategy}'`
-> — `maxUnavailable` should be `1`, not `0`.
+> — `maxUnavailable` should be `100%`, not `0`.
 
 ---
 
