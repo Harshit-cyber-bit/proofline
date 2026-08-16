@@ -157,6 +157,20 @@ FAIL deployment.yaml Deployment: spec.template.spec.containers.0:
 
 ## Details worth stealing
 
+**Measure through the path your users take.** The first working version of the
+prober reached the service with `kubectl port-forward svc/proofline`. That
+resolves the Service to *one* backing pod and tunnels to it — so a correct
+rollout that replaced that pod looked like 18 seconds of downtime, while the
+deliberately-broken overlay kept its tunnel and "passed". The results were
+exactly inverted, and both looked plausible. It now hits a NodePort, which goes
+through kube-proxy and load balances across every ready endpoint. A measurement
+harness that does not share the production data path is measuring itself.
+
+**`maxUnavailable: 25%` of 2 replicas is 0.** Percentages round down for
+`maxUnavailable`. At two replicas the Kubernetes default is accidentally safe,
+and only starts dropping traffic at four or more — so the "unsafe" overlay in
+this repo has to say `maxUnavailable: 1` outright to misbehave at demo scale.
+
 **Liveness and readiness are different questions.** Liveness asks "is this
 process wedged"; readiness asks "should traffic come here now". Wiring both to
 the same handler means a draining pod reports unhealthy, the kubelet restarts it

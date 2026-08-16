@@ -146,6 +146,7 @@ jobs:
         with:
           cluster_name: proofline
           node_image: kindest/node:v1.31.0
+          config: hack/kind-ci.yaml
 
       - name: Install kustomize
         run: |
@@ -168,8 +169,7 @@ jobs:
       # fail the build if a single request is dropped.
       - name: Prove the rollout drops nothing
         run: |
-          kubectl set env deployment/proofline -n proofline-dev ROLLOUT_TRIGGER=$(date +%s)
-          ./hack/probe-rollout.sh kind-proofline proofline-dev 18080 reports/ci/probe.json
+          ./hack/probe-rollout.sh kind-proofline proofline-dev 30080 reports/ci/probe.json
 
       - name: Upload the evidence
         if: always()

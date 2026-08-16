@@ -14,3 +14,7 @@ patches:
     target:
       kind: Deployment
       name: proofline
+  - path: service-nodeport.yaml
+    target:
+      kind: Service
+      name: proofline

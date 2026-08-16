@@ -1,0 +1,17 @@
+---
+# Cluster config for CI. Same NodePort mappings as hack/kind-with-registry.sh,
+# minus the local registry (CI side-loads the image with `kind load` instead).
+#
+# The mappings are what let the prober reach the Service through kube-proxy.
+# Without them CI would have to fall back to a port-forward, which measures a
+# single pod rather than the Service -- the exact bug this repo exists to catch.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+  - role: worker
+  - role: worker

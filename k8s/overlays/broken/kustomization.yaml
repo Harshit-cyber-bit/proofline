@@ -3,10 +3,9 @@
 #
 # This overlay exists so the prober can be shown catching something. A check
 # that has never failed in front of anyone is indistinguishable from a check
-# that cannot fail, and "we have a zero-downtime test" is worth exactly as much
-# as the last time somebody watched it go red.
+# that cannot fail.
 #
-# Deployed to the dev namespace by `make break`.
+# Deployed to the dev namespace by `make break`, so it reuses dev's NodePort.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: proofline-dev
@@ -21,4 +20,8 @@ patches:
   - path: remove-safety.yaml
     target:
       kind: Deployment
+      name: proofline
+  - path: ../dev/service-nodeport.yaml
+    target:
+      kind: Service
       name: proofline

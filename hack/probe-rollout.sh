@@ -1,69 +1,67 @@
 #!/usr/bin/env bash
 # Probe a service for the duration of its rollout.
 #
-# Port-forwards to the *Service* rather than to a pod, deliberately. Probing a
-# single pod would miss the thing worth measuring: the window where a pod has
-# stopped serving but is still in the endpoint list, so the Service is still
-# sending it traffic. That gap is where dropped requests live.
+# Hits the Service's NodePort on localhost, which kind maps through to the
+# cluster. That path goes through kube-proxy, which load balances across every
+# ready endpoint -- the same path real traffic takes.
 #
-# Usage: probe-rollout.sh <kube-context> <namespace> <local-port> <report-path> [duration]
+# An earlier version of this script used `kubectl port-forward svc/proofline`.
+# That was wrong, and wrong in a way that inverted the result: port-forward
+# resolves the Service to ONE backing pod and tunnels to it. When a rollout
+# replaced that pod the tunnel died, and the prober reported ~18 seconds of
+# downtime on a rollout that never dropped a single real request. Meanwhile the
+# genuinely unsafe overlay happened to keep its tunnel alive and "passed".
 #
-# With a duration, probes for that many seconds. Without one, probes until
-# `kubectl rollout status` returns, plus a tail to catch the old pods finishing
-# their termination.
+# The lesson generalises: measure through the same path your users take, or you
+# are measuring your test harness.
+#
+# Usage: probe-rollout.sh <kube-context> <namespace> <node-port> <report> [duration]
 set -o errexit
 set -o nounset
 set -o pipefail
 
-CONTEXT="${1:?usage: probe-rollout.sh <context> <namespace> <port> <report> [duration]}"
+CONTEXT="${1:?usage: probe-rollout.sh <context> <namespace> <node-port> <report> [duration]}"
 NAMESPACE="${2:?namespace required}"
-PORT="${3:?local port required}"
+PORT="${3:?node port required}"
 REPORT="${4:?report path required}"
 DURATION="${5:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE_URL="http://127.0.0.1:${PORT}"
 
 mkdir -p "$(dirname "${REPORT}")"
 
-kubectl --context "${CONTEXT}" port-forward \
-  -n "${NAMESPACE}" svc/proofline "${PORT}:80" >/dev/null 2>&1 &
-FORWARD_PID=$!
-
-cleanup() {
-  kill "${FORWARD_PID}" 2>/dev/null || true
-  wait "${FORWARD_PID}" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# Wait for the forward to be usable rather than sleeping a guessed amount. A
-# probe that starts before the tunnel is up records its own startup as an
+# Wait for the service to answer before starting, rather than sleeping a
+# guessed amount. A probe that starts too early records its own startup as an
 # outage.
-for _ in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+ready=false
+for _ in $(seq 1 60); do
+  if curl -fsS --max-time 2 "${BASE_URL}/healthz" >/dev/null 2>&1; then
+    ready=true
     break
   fi
   sleep 1
 done
 
+if [ "${ready}" != "true" ]; then
+  echo "service not reachable at ${BASE_URL} after 60s." >&2
+  echo "Check the NodePort is mapped: kubectl --context ${CONTEXT} get svc -n ${NAMESPACE} proofline" >&2
+  echo "If the cluster predates the NodePort change, recreate it: make down && make cluster" >&2
+  exit 1
+fi
+
 if [ -n "${DURATION}" ]; then
   python3 "${REPO_ROOT}/prober/prober.py" \
-    --url "http://127.0.0.1:${PORT}/api/work" \
+    --url "${BASE_URL}/api/work" \
     --duration "${DURATION}" \
     --interval 0.1 \
     --report "${REPORT}"
   exit $?
 fi
 
-# Trigger the rollout from *inside* the probe window rather than before it.
-#
-# Doing it beforehand loses the race that matters: by the time the prober has a
-# port-forward and its first request away, the pods may already have cycled, and
-# the run reports a clean rollout it never actually watched. Re-applying an
-# unchanged manifest has the same problem from the other direction -- nothing
-# rolls, `rollout status` returns instantly, and the probe proves nothing.
-#
-# ROLLOUT_RESTART=1 (the default) forces a genuine rolling update as the first
-# thing the probe window sees.
+# Trigger the rollout from inside the probe window. Doing it beforehand loses
+# the race that matters: the pods may already have cycled before the first
+# request goes out.
 if [ "${ROLLOUT_RESTART:-1}" = "1" ]; then
   TRIGGER="kubectl --context ${CONTEXT} rollout restart deployment/proofline -n ${NAMESPACE} && "
 else
@@ -71,7 +69,7 @@ else
 fi
 
 python3 "${REPO_ROOT}/prober/prober.py" \
-  --url "http://127.0.0.1:${PORT}/api/work" \
+  --url "${BASE_URL}/api/work" \
   --interval 0.2 \
   --until-command "/bin/sh -c '${TRIGGER}kubectl --context ${CONTEXT} rollout status deployment/proofline -n ${NAMESPACE} --timeout=300s'" \
   --report "${REPORT}"

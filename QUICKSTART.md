@@ -163,6 +163,12 @@ curl -s localhost:8080 | python3 -m json.tool
 
 ## Stage 2 — The proof (5 minutes) ⭐ record this
 
+> **If your cluster predates the NodePort change**, recreate it first:
+> `make down && make cluster && make namespaces && make build && make deploy`.
+> `make cluster` checks for this and tells you if so. The prober now reaches the
+> Service on a NodePort (30080/30081/30082) rather than through a port-forward,
+> and those mappings only exist on a cluster created with the current config.
+
 ```bash
 make prove
 ```

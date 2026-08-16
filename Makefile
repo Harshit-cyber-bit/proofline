@@ -13,7 +13,15 @@ IMAGE        ?= $(REGISTRY)/proofline/app
 TAG          ?= dev
 ENV          ?= dev
 PROMETHEUS   ?= http://localhost:30090
-PROBE_PORT   ?= 18080
+
+# Fixed NodePorts, mapped to the host by hack/kind-with-registry.sh. The prober
+# hits these so it goes through kube-proxy -- the path real traffic takes --
+# rather than a port-forward, which tunnels to a single pod and turns any
+# rollout into a fake outage.
+NODEPORT_dev     := 30080
+NODEPORT_staging := 30081
+NODEPORT_prod    := 30082
+PROBE_PORT        = $(NODEPORT_$(ENV))
 
 KUBECTL := kubectl --context $(KUBE_CONTEXT)
 NS       = proofline-$(ENV)
@@ -77,6 +85,15 @@ check-docker: ## Verify the Docker daemon is reachable as this user
 cluster: check-docker ## Create the kind cluster and local registry
 	$(call banner,creating cluster)
 	@./hack/kind-with-registry.sh
+	@# A cluster created before the NodePort mappings were added cannot expose
+	@# them, and the failure surfaces later as "service not reachable".
+	@docker inspect proofline-control-plane \
+		--format '{{range $$p, $$c := .NetworkSettings.Ports}}{{$$p}} {{end}}' 2>/dev/null \
+		| grep -q '30080/tcp' \
+		|| { echo ""; \
+		     echo "$(BOLD)This cluster predates the NodePort mappings.$(RESET)"; \
+		     echo "Recreate it:  make down && make cluster"; \
+		     echo ""; exit 1; }
 
 .PHONY: namespaces
 namespaces: ## Create the environment namespaces
@@ -141,7 +158,7 @@ break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 	@mkdir -p reports/broken
 	@cd k8s/overlays/broken && kustomize edit set image proofline/app=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/broken
-	@-./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(PROBE_PORT) reports/broken/probe.json
+	@-./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) reports/broken/probe.json
 	@echo ""
 	@echo "$(BOLD)restoring the safe overlay$(RESET)"
 	@$(KUBECTL) apply -k k8s/overlays/dev
@@ -160,7 +177,7 @@ burn: ## Inject errors into dev, then watch the SLO gate block promotion
 	@$(KUBECTL) set env deployment/proofline -n proofline-dev APP_ERROR_RATE=0.2
 	@$(KUBECTL) rollout status deployment/proofline -n proofline-dev --timeout=300s
 	$(call banner,generating traffic so the gate has something to judge)
-	@./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(PROBE_PORT) \
+	@./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) \
 		reports/dev/burn-probe.json 120 || true
 	$(call banner,asking the gate)
 	@-python3 slo/gate.py --prometheus $(PROMETHEUS) --environment dev \

@@ -4,13 +4,16 @@ kind: Deployment
 metadata:
   name: proofline
 spec:
-  # Each of these is a common default, and each one drops requests.
+  # Each of these drops requests.
   strategy:
     rollingUpdate:
-      # The Kubernetes default. Explicitly permits a quarter of capacity to
-      # disappear mid-rollout.
-      maxUnavailable: 25%
-      maxSurge: 25%
+      # An absolute 1, not the default 25%. With 2 replicas, 25% rounds DOWN to
+      # zero -- so the Kubernetes default is accidentally safe at small replica
+      # counts and this overlay proved nothing. It only starts dropping traffic
+      # at 4+ replicas, which is exactly the sort of thing you discover in
+      # production rather than in a demo.
+      maxUnavailable: 1
+      maxSurge: 1
   # No soak before a pod counts as available.
   minReadySeconds: 0
   template:

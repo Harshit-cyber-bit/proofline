@@ -47,8 +47,23 @@ nodes:
       kubeletExtraArgs:
         node-labels: "ingress-ready=true"
   extraPortMappings:
+  # NodePorts for the application, one per environment. The prober MUST reach
+  # the service the way real traffic does -- through kube-proxy, which load
+  # balances across every ready endpoint. A kubectl port-forward does
+  # not do that: it picks a single backing pod and tunnels to it, so when that
+  # pod is replaced during a rollout the tunnel dies and the prober records an
+  # outage that never happened to actual users.
+  - containerPort: 30080
+    hostPort: 30080
+    protocol: TCP
+  - containerPort: 30081
+    hostPort: 30081
+    protocol: TCP
+  - containerPort: 30082
+    hostPort: 30082
+    protocol: TCP
   # NodePorts for Prometheus, Grafana and Alertmanager, so the SLO gate and the
-  # dashboards are reachable from the host without another port-forward.
+  # dashboards are reachable from the host.
   - containerPort: 30090
     hostPort: 30090
     protocol: TCP

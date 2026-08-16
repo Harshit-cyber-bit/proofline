@@ -1,0 +1,19 @@
+---
+# Exposes the service on a fixed NodePort that kind maps to the host.
+#
+# This is how the prober reaches it. Probing through `kubectl port-forward`
+# would measure a single pod rather than the Service: port-forward resolves the
+# service to one backing pod and tunnels to it, so a rollout that replaces that
+# pod looks like a total outage even when kube-proxy never dropped a request.
+apiVersion: v1
+kind: Service
+metadata:
+  name: proofline
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+      nodePort: 30080
