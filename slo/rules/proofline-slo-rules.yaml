@@ -29,45 +29,45 @@ spec:
         # per alert that references it.
         - record: proofline:sli_errors:ratio_rate5m
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[5m]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[5m]))
             /
-            sum(rate(http_requests_total{job="proofline"}[5m]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[5m]))
 
         - record: proofline:sli_errors:ratio_rate30m
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[30m]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[30m]))
             /
-            sum(rate(http_requests_total{job="proofline"}[30m]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[30m]))
 
         - record: proofline:sli_errors:ratio_rate1h
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[1h]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[1h]))
             /
-            sum(rate(http_requests_total{job="proofline"}[1h]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[1h]))
 
         - record: proofline:sli_errors:ratio_rate2h
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[2h]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[2h]))
             /
-            sum(rate(http_requests_total{job="proofline"}[2h]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[2h]))
 
         - record: proofline:sli_errors:ratio_rate6h
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[6h]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[6h]))
             /
-            sum(rate(http_requests_total{job="proofline"}[6h]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[6h]))
 
         - record: proofline:sli_errors:ratio_rate1d
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[1d]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[1d]))
             /
-            sum(rate(http_requests_total{job="proofline"}[1d]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[1d]))
 
         - record: proofline:sli_errors:ratio_rate3d
           expr: |
-            sum(rate(http_requests_total{job="proofline",status=~"5.."}[3d]))
+            sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[3d]))
             /
-            sum(rate(http_requests_total{job="proofline"}[3d]))
+            sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[3d]))
 
         # Latency SLI: the proportion of requests *slower* than the 250ms
         # objective, expressed as an error ratio so it shares the same
@@ -75,9 +75,9 @@ spec:
         - record: proofline:sli_latency_errors:ratio_rate1h
           expr: |
             1 - (
-              sum(rate(http_request_duration_seconds_bucket{job="proofline",le="0.25"}[1h]))
+              sum(rate(http_request_duration_seconds_bucket{job="proofline",le="0.25",path!~"/healthz|/readyz|/metrics"}[1h]))
               /
-              sum(rate(http_request_duration_seconds_count{job="proofline"}[1h]))
+              sum(rate(http_request_duration_seconds_count{job="proofline",path!~"/healthz|/readyz|/metrics"}[1h]))
             )
 
         # The remaining share of the 30-day error budget, for dashboards and
@@ -86,9 +86,9 @@ spec:
           expr: |
             1 - (
               (
-                sum(increase(http_requests_total{job="proofline",status=~"5.."}[30d]))
+                sum(increase(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[30d]))
                 /
-                sum(increase(http_requests_total{job="proofline"}[30d]))
+                sum(increase(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[30d]))
               ) / 0.005
             )
 

@@ -40,6 +40,8 @@ NS       = proofline-$(ENV)
 
 ifneq (,$(findstring xterm,$(TERM)))
 	BOLD  := $(shell tput bold)
+	RED   := $(shell tput setaf 1)
+	GREEN := $(shell tput setaf 2)
 	RESET := $(shell tput sgr0)
 endif
 
@@ -229,6 +231,13 @@ gate: ## Ask the SLO gate whether ENV earned promotion
 	@python3 slo/gate.py --prometheus $(PROMETHEUS) --environment $(ENV) \
 		--report reports/$(ENV)/gate.json
 
+.PHONY: gate-explain
+gate-explain: ## Ask the gate, and show the traffic breakdown behind its answer
+	$(call banner,slo gate: $(ENV) -- explained)
+	@mkdir -p reports/$(ENV)
+	@-python3 slo/gate.py --prometheus $(PROMETHEUS) --environment $(ENV) \
+		--explain --report reports/$(ENV)/gate.json
+
 .PHONY: burn
 burn: ## Inject errors into dev, then watch the SLO gate block promotion
 	$(call banner,injecting a 20%% error rate into dev)
@@ -238,12 +247,27 @@ burn: ## Inject errors into dev, then watch the SLO gate block promotion
 	@./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) \
 		reports/dev/burn-probe.json 120 || true
 	$(call banner,asking the gate)
-	@-python3 slo/gate.py --prometheus $(PROMETHEUS) --environment dev \
-		--report reports/dev/burn-gate.json
-	@echo ""
-	@echo "$(BOLD)removing the injected errors$(RESET)"
-	@$(KUBECTL) set env deployment/proofline -n proofline-dev APP_ERROR_RATE-
-	@$(KUBECTL) rollout status deployment/proofline -n proofline-dev --timeout=300s
+	@# The gate is expected to BLOCK. If it promotes a deployment the prober
+	@# just failed, that is a bug in the gate, not a passing test -- so this
+	@# target fails, loudly, and prints the traffic breakdown that explains it.
+	@python3 slo/gate.py --prometheus $(PROMETHEUS) --environment dev \
+		--explain --report reports/dev/burn-gate.json; \
+		rc=$$?; \
+		echo ""; \
+		echo "$(BOLD)removing the injected errors$(RESET)"; \
+		$(KUBECTL) set env deployment/proofline -n proofline-dev APP_ERROR_RATE- >/dev/null; \
+		$(KUBECTL) rollout status deployment/proofline -n proofline-dev --timeout=300s; \
+		echo ""; \
+		if [ $$rc -eq 0 ]; then \
+			echo "$(RED)the gate promoted a deployment serving 20% errors.$(RESET)"; \
+			echo ""; \
+			echo "  The prober failed this same rollout. Two measurements of one"; \
+			echo "  event disagreeing means one of them is wrong, and it is this one."; \
+			echo "  Look at the breakdown above: if health-check traffic dominates"; \
+			echo "  the denominator, real errors are being divided into the noise."; \
+			exit 1; \
+		fi; \
+		echo "$(GREEN)the gate blocked promotion, which is the point.$(RESET)"
 
 ##@ Jenkins
 

@@ -280,6 +280,21 @@ make gate           # expect PASS
 make burn           # inject 20% errors -- expect BLOCKED
 ```
 
+`make burn` **fails the build if the gate lets the deployment through**, and
+prints the traffic breakdown that explains why. That is not decoration: the
+first version of this gate did promote a deployment serving 20% errors, and
+without that check the target would have printed a cheerful `PASS` and moved on.
+
+If you want to see the breakdown on a passing run too:
+
+```bash
+make gate-explain
+```
+
+It prints requests by path, marks which ones are excluded from the SLI, and says
+how much the excluded traffic would have diluted a real error had it been
+counted.
+
 > **If the gate says "no data":** run `make prom-check` — it will tell you which
 > of the three links in the chain is broken. Usually Prometheus has not scraped
 > the app under the `proofline` job label; the ServiceMonitor's `jobLabel` reads
@@ -287,6 +302,18 @@ make burn           # inject 20% errors -- expect BLOCKED
 > `kubectl get svc -n proofline-dev --show-labels` must show
 > `app.kubernetes.io/name=proofline`. Give it 60 seconds after deploying before
 > judging.
+>
+> **If `make burn` reports that the gate promoted a bad deployment:** read the
+> breakdown it prints. The gate and the prober have measured the same rollout
+> and disagreed, which means one of them is measuring the wrong thing. Two
+> causes account for nearly every instance:
+>
+> 1. **The window is too long.** A two-minute burn averaged over ten minutes
+>    lands under a 1% threshold. The gate checks a 2-minute window as well for
+>    this reason; if you widened `--short-window`, narrow it again.
+> 2. **Health-check traffic is in the denominator.** `/readyz` every two seconds
+>    is a stream of guaranteed 200s. The breakdown shows this immediately — if
+>    the excluded paths are most of the total, the dilution factor is printed.
 >
 > **On 8 GB:** if Prometheus gets OOMKilled, set `monitoring_enabled = false`
 > and skip this stage. Stages 1, 2 and 4 do not need it.

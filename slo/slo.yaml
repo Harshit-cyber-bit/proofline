@@ -2,8 +2,14 @@
 # The service level objectives, written once, in the place people will look.
 #
 # These are the source of truth. The PrometheusRule in slo/rules/ implements
-# them, and the pipeline's promotion gate reads the same objectives from here --
-# so an SLO cannot drift out of agreement with the thing enforcing it.
+# them, and the pipeline's promotion gate enforces them.
+#
+# That claim used to be aspirational. The alert rules measured the error ratio
+# with rate() over paired long and short windows; the gate used a single
+# ten-minute increase(). A deployment serving 20% errors for two minutes came
+# out under 1% once averaged over ten, so the gate promoted a release the alerts
+# would have paged for. Both now use the same SLI, the same path exclusions, and
+# the same two-window discipline.
 service: proofline
 
 objectives:
@@ -14,13 +20,18 @@ objectives:
       purpose: a client asking for something that does not exist is not the
       service being unavailable, and counting it means every scanner and stale
       bookmark eats the error budget.
+
+      /healthz, /readyz and /metrics are excluded too. A readiness probe every
+      two seconds is a guaranteed 200 that no user ever made; counted in the
+      SLI it silently pads availability, and it pads it hardest when the
+      service is small -- which is exactly when a deploy is being judged.
     objective: 99.5
     window: 30d
     sli:
       error_query: |
-        sum(rate(http_requests_total{job="proofline",status=~"5.."}[{window}]))
+        sum(rate(http_requests_total{job="proofline",status=~"5..",path!~"/healthz|/readyz|/metrics"}[{window}]))
       total_query: |
-        sum(rate(http_requests_total{job="proofline"}[{window}]))
+        sum(rate(http_requests_total{job="proofline",path!~"/healthz|/readyz|/metrics"}[{window}]))
 
   - name: latency
     description: >-
@@ -32,9 +43,9 @@ objectives:
     threshold_seconds: 0.25
     sli:
       error_query: |
-        sum(rate(http_request_duration_seconds_bucket{job="proofline",le="0.25"}[{window}]))
+        sum(rate(http_request_duration_seconds_bucket{job="proofline",le="0.25",path!~"/healthz|/readyz|/metrics"}[{window}]))
       total_query: |
-        sum(rate(http_request_duration_seconds_count{job="proofline"}[{window}]))
+        sum(rate(http_request_duration_seconds_count{job="proofline",path!~"/healthz|/readyz|/metrics"}[{window}]))
 
 # Burn-rate alerting, per the Google SRE workbook. Two windows per severity:
 # a long one to establish that the budget really is burning, and a short one so
@@ -68,6 +79,11 @@ promotion_gate:
   # "is the service healthy overall" -- it is asking "did the thing I just
   # deployed make it worse", and that question has a much shorter horizon.
   window: 10m
+  # And the same two-window discipline as the alerts, for the same reason. A
+  # regression that started ninety seconds ago has barely moved a ten-minute
+  # average; on the short window it is unmissable. Either window over the
+  # threshold blocks the promotion.
+  short_window: 2m
   max_error_ratio: 0.01
   # A gate that passes because nothing was running is not a gate. If the
   # environment saw fewer requests than this, the answer is "unknown", and
