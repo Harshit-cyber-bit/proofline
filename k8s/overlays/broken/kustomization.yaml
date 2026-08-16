@@ -21,7 +21,9 @@ patches:
     target:
       kind: Deployment
       name: proofline
-  - path: ../dev/service-nodeport.yaml
+  # A local copy, not ../dev/... : kustomize refuses patch files outside the
+  # kustomization root ('not in or below'). Only `resources` may point upward.
+  - path: service-nodeport.yaml
     target:
       kind: Service
       name: proofline

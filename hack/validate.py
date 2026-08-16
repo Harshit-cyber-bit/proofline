@@ -218,6 +218,20 @@ def check_overlays() -> None:
             if patch_path and not (directory / patch_path).exists():
                 fail(f"{label}: patch references missing file {patch_path!r}")
 
+            # kustomize refuses to load a patch file from outside the
+            # kustomization root -- "security; file ... is not in or below ...".
+            # `resources` may point upward (that is how overlays reference a
+            # base); `patches` may not. The file existing is not sufficient.
+            if patch_path:
+                root = directory.resolve()
+                target_file = (directory / patch_path).resolve()
+                if not str(target_file).startswith(str(root) + "/"):
+                    fail(
+                        f"{label}: patch path {patch_path!r} escapes the "
+                        "kustomization root; kustomize will refuse it. Copy the "
+                        "file into this directory instead."
+                    )
+
             target = patch.get("target") or {}
             key = (target.get("kind"), target.get("name"))
             if key[0] and key not in base_resources:

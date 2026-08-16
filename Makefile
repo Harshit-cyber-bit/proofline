@@ -152,7 +152,7 @@ prove: ## Deploy to ENV and prove the rollout dropped no requests
 .PHONY: break
 break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 	$(call banner,deploying the deliberately unsafe overlay)
-	@echo "maxUnavailable 25%, no preStop hook, no drain, 60s readiness period."
+	@echo "maxUnavailable 1, no preStop hook, no drain, 60s readiness period."
 	@echo "If the prober passes this, the prober is broken -- that is the point."
 	@echo ""
 	@mkdir -p reports/broken
