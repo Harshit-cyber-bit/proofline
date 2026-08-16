@@ -44,13 +44,13 @@ module "registry" {
 module "compute" {
   source = "./modules/compute"
 
-  name              = var.name
-  environment       = var.environment
-  vpc_id            = module.network.vpc_id
-  public_subnet_ids = module.network.public_subnet_ids
+  name               = var.name
+  environment        = var.environment
+  vpc_id             = module.network.vpc_id
+  public_subnet_ids  = module.network.public_subnet_ids
   private_subnet_ids = module.network.private_subnet_ids
-  instance_type     = var.instance_type
-  min_size          = var.fleet_min_size
-  max_size          = var.fleet_max_size
-  app_port          = var.app_port
+  instance_type      = var.instance_type
+  min_size           = var.fleet_min_size
+  max_size           = var.fleet_max_size
+  app_port           = var.app_port
 }

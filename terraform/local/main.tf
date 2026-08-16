@@ -94,7 +94,7 @@ resource "helm_release" "monitoring" {
     grafana = {
       adminPassword = "proofline"
       service = {
-        type = "NodePort"
+        type     = "NodePort"
         nodePort = 30300
       }
     }
