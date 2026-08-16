@@ -300,8 +300,23 @@ burn: ## Inject errors into dev, then watch the SLO gate block promotion
 .PHONY: jenkins
 jenkins: ## Start the Jenkins controller (configured entirely from code)
 	$(call banner,starting jenkins on http://localhost:8081)
+	@# The host kubeconfig points at 127.0.0.1 and a published port, which from
+	@# inside the Jenkins container means the container. --internal addresses the
+	@# control plane by name on the kind network, where Jenkins also runs.
+	@kind get kubeconfig --name $(CLUSTER_NAME) --internal > jenkins/.kubeconfig-internal 2>/dev/null \
+		|| { echo "  $(RED)no kind cluster named $(CLUSTER_NAME).$(RESET)  Run: make cluster"; exit 1; }
 	@docker compose -f jenkins/docker-compose.yml up -d --build
-	@echo "admin / proofline"
+	@echo ""
+	@echo "  http://localhost:8081    admin / proofline"
+	@echo ""
+	@grep -q YOUR_HANDLE jenkins/casc.yaml && { \
+		echo "  $(BOLD)The controller will come up fully configured, and the job will exist,$(RESET)"; \
+		echo "  $(BOLD)but it cannot check out yet:$(RESET) jenkins/casc.yaml still points at"; \
+		echo "  github.com/YOUR_HANDLE/proofline. Push the repo, put your handle in,"; \
+		echo "  then: docker compose -f jenkins/docker-compose.yml restart"; \
+		echo ""; \
+	} || true
+	@echo "  Watch it configure itself:  make jenkins-logs"
 
 .PHONY: jenkins-logs
 jenkins-logs: ## Tail the Jenkins log

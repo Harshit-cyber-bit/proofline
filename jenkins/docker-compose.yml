@@ -27,7 +27,13 @@ services:
       # Docker socket and kubeconfig. Fine for a laptop demo; not a pattern to
       # copy into a shared controller, where it hands every job root on the host.
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${HOME}/.kube:/var/jenkins_home/.kube
+      # NOT ${HOME}/.kube. kind writes a kubeconfig pointing at 127.0.0.1 and a
+      # published host port; inside this container 127.0.0.1 is this container,
+      # so every kubectl call fails to connect and the error names a port that
+      # is demonstrably open on the host. `make jenkins` writes the --internal
+      # form here instead, which addresses the control plane by container name
+      # on the kind network -- where this container also lives.
+      - ./.kubeconfig-internal:/var/jenkins_home/.kube/config:ro
     networks:
       - kind
 

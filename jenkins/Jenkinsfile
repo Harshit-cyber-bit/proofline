@@ -39,11 +39,37 @@ pipeline {
     }
 
     environment {
+        // localhost:5001 is correct here even though the registry is not on
+        // this container: docker build and push go through the host's Docker
+        // socket, so they resolve on the host, where localhost:5001 is the kind
+        // registry. Everything else in this file has to use container names.
         REGISTRY    = 'localhost:5001'
         IMAGE       = "${REGISTRY}/proofline/app"
+
+        // The name kustomize matches on when overriding the image. Must equal
+        // the image written in k8s/base/deployment.yaml, registry prefix and
+        // all -- a bare 'proofline/app' matches nothing and the override
+        // silently does not happen, leaving the base default to deploy.
+        IMAGE_NAME  = "${REGISTRY}/proofline/app"
+
         TAG         = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(12) : env.BUILD_NUMBER}"
-        PROMETHEUS  = 'http://localhost:30090'
-        KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
+
+        // Jenkins runs as a container on the kind network, so it reaches the
+        // cluster by container name. 'localhost' in here is the Jenkins
+        // container itself, which serves nothing.
+        KIND_NODE   = 'proofline-control-plane'
+        PROMETHEUS  = 'http://proofline-control-plane:30090'
+
+        // Written by `make jenkins` with `kind get kubeconfig --internal`. The
+        // ordinary kubeconfig points at 127.0.0.1 and a host port, which from
+        // in here resolves to this container.
+        KUBECONFIG  = '/var/jenkins_home/.kube/config'
+
+        // Latency ceiling for a rollout, in milliseconds. An outage does not
+        // always arrive as errors: with no ready endpoints kube-proxy holds the
+        // connection until a pod appears, so requests succeed one to two
+        // seconds later. Without this, that is invisible.
+        PROBE_MAX_P99 = '1000'
     }
 
     stages {
@@ -138,6 +164,21 @@ void deployAndProve(String environment) {
     String namespace = "proofline-${environment}"
     String reports = "reports/${environment}"
 
+    // Fixed NodePorts, mapped by hack/kind-with-registry.sh and matching the
+    // Makefile. The prober reaches the Service through kube-proxy on the node,
+    // which is the path real traffic takes.
+    //
+    // It used to use `kubectl port-forward svc/proofline`, with a comment
+    // claiming that was how you hit the Service rather than a single pod. That
+    // is exactly wrong and it is the most expensive mistake in this repo's
+    // history: port-forward does NOT load-balance. It picks one pod and tunnels
+    // to it. When a rollout replaced that pod the tunnel died, so the *safe*
+    // configuration reported eighteen seconds of downtime and the deliberately
+    // broken one reported none. The results were perfectly inverted and both
+    // numbers looked plausible.
+    Map nodePorts = [dev: 30080, staging: 30081, prod: 30082]
+    String target = "http://${KIND_NODE}:${nodePorts[environment]}/api/work"
+
     sh "mkdir -p ${reports}"
 
     // Point the overlay at the exact image this build produced. Never 'latest':
@@ -145,51 +186,44 @@ void deployAndProve(String environment) {
     // reference, or none of the evidence below refers to anything in particular.
     sh """
         cd k8s/overlays/${environment}
-        kustomize edit set image proofline/app=${IMAGE}:${TAG}
+        kustomize edit set image ${IMAGE_NAME}=${IMAGE}:${TAG}
     """
 
     sh "kubectl apply -k k8s/overlays/${environment}"
 
-    // Port-forward so the prober hits the Service the way traffic does, rather
-    // than a single pod IP -- probing one pod would miss exactly the endpoint
-    // churn that a bad rollout causes.
-    String forward = "kubectl port-forward -n ${namespace} svc/proofline 18080:80"
-
+    // No background process, no trap, no sleep waiting for a tunnel to come up.
+    // Removing the port-forward removed three lines of shell whose only job was
+    // to manage the thing that was corrupting the measurement.
     sh """
-        set -e
-        ${forward} &
-        FORWARD_PID=\$!
-        trap "kill \$FORWARD_PID 2>/dev/null || true" EXIT
-        sleep 5
-
         python3 prober/prober.py \\
-            --url http://127.0.0.1:18080/api/work \\
+            --url ${target} \\
             --interval ${params.PROBE_INTERVAL} \\
+            --max-latency-p99 ${PROBE_MAX_P99} \\
             --until-command "kubectl rollout status deployment/proofline -n ${namespace} --timeout=300s" \\
             --report ${reports}/probe.json
     """
 
-    // Give the deployment a few minutes of steady traffic before judging it.
-    // The gate needs a sample, and a verdict formed ten seconds after rollout
-    // is a verdict about nothing.
+    // Give the deployment a couple of minutes of steady traffic before judging
+    // it. The gate needs a sample, and a verdict formed ten seconds after a
+    // rollout is a verdict about nothing.
     sh """
-        set -e
-        ${forward} &
-        FORWARD_PID=\$!
-        trap "kill \$FORWARD_PID 2>/dev/null || true" EXIT
-        sleep 3
-
         python3 prober/prober.py \\
-            --url http://127.0.0.1:18080/api/work \\
+            --url ${target} \\
             --duration 120 --interval 0.1 \\
+            --max-latency-p99 ${PROBE_MAX_P99} \\
             --report ${reports}/soak.json
     """
 
+    // Two windows, not one. A regression that started ninety seconds ago has
+    // barely moved a ten-minute average; on the short window it is unmissable.
+    // A single-window gate here once promoted a deployment serving 20% errors
+    // that the prober above had just failed.
     sh """
         python3 slo/gate.py \\
             --prometheus ${PROMETHEUS} \\
             --environment ${environment} \\
             --window 10m \\
+            --short-window 2m \\
             --report ${reports}/gate.json
     """
 
