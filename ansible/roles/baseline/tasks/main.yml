@@ -3,6 +3,42 @@
 # Written to be idempotent: running it twice must change nothing the second
 # time, which the CI check asserts by running it twice and diffing the counts.
 
+# Without this, the first task of the first run fails with "No package matching
+# 'curl' is available" -- which reads like the package does not exist, when in
+# fact the host has never fetched a package list. Container base images clear
+# /var/lib/apt/lists to stay small, and a freshly provisioned cloud instance is
+# in the same state.
+#
+# ansible.builtin.package cannot do this: refreshing a cache is package-manager
+# specific and the generic module deliberately has no option for it. So this is
+# split by ansible_pkg_mgr, which is also what makes the role work on both the
+# Debian-family fleet and an RPM host.
+#
+# changed_when: false because fetching a package list is not a change to the
+# host's configuration. Left as-is it would report changed on every run and the
+# idempotence check -- the one thing this role's CI actually asserts -- would
+# fail forever on a task that had done nothing.
+- name: Refresh the package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_pkg_mgr == 'apt'
+  changed_when: false
+  register: baseline_apt_cache
+  retries: 3
+  delay: 5
+  until: baseline_apt_cache is succeeded
+
+- name: Refresh the package cache (dnf/yum)
+  ansible.builtin.dnf:
+    update_cache: true
+  when: ansible_pkg_mgr in ['dnf', 'dnf5', 'yum']
+  changed_when: false
+  register: baseline_dnf_cache
+  retries: 3
+  delay: 5
+  until: baseline_dnf_cache is succeeded
+
 - name: Ensure baseline packages are present
   ansible.builtin.package:
     name: "{{ baseline_packages }}"

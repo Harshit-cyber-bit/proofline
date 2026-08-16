@@ -1,6 +1,10 @@
 ---
 - name: Configure the application fleet
-  hosts: all
+  # Not `all`. The Docker inventory returns every container on the machine --
+  # the kind nodes, the registry, Jenkins -- and `all` would configure them.
+  # Selection lives here rather than in the inventory's filters option, which
+  # is not a Docker label filter; see ansible/inventory/docker.yml.
+  hosts: proofline-app-*
   become: true
   gather_facts: true
 

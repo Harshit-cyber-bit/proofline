@@ -1,17 +1,37 @@
 ---
 # Dynamic inventory over the Docker API.
 #
-# Terraform creates the fleet and labels it; Ansible discovers it by that label.
-# Nothing is hardcoded and no inventory file has to be regenerated when
-# fleet_size changes -- which is the same reason you would use an AWS EC2
-# dynamic inventory rather than a static hosts file in a real environment.
+# Terraform creates the fleet; Ansible discovers it. Nothing is hardcoded and no
+# inventory file has to be regenerated when fleet_size changes -- the same
+# reason you would use an EC2 dynamic inventory rather than a static hosts file
+# in a real environment.
+#
+# There is deliberately no `filters:` here, and that is worth explaining because
+# the obvious version of this file had one:
+#
+#     filters:
+#       label:
+#         - "proofline.role=app"
+#
+# which looks like a Docker label filter and is not. This plugin's `filters`
+# option is the generic inventory-filtering interface from
+# community.library_inventory_filtering_v1 -- a *list* of include/exclude Jinja
+# conditions evaluated per host, with no access to container labels unless
+# verbose_output pulls the whole `docker inspect` payload into host vars.
+#
+# It failed with "Invalid value provided for 'list'". What makes that worth a
+# permanent comment is how it failed: Ansible logs an unparseable inventory as a
+# WARNING, falls back to the implicit localhost, and runs the playbook anyway.
+# A configuration-management run aimed at three servers silently retargeted at
+# the laptop it was launched from.
+#
+# So selection happens in site.yml instead, with an ordinary host pattern:
+# `hosts: proofline-app-*`. Plain ansible-core behaviour, nothing plugin
+# specific to get wrong. The names come from Terraform's name_prefix, so this
+# is still Terraform deciding and Ansible discovering.
 plugin: community.docker.docker_containers
 
 docker_host: unix://var/run/docker.sock
-
-filters:
-  label:
-    - "proofline.role=app"
 
 connection_type: docker-api
 

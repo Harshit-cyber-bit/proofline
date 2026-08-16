@@ -127,6 +127,11 @@ fleet-check: ## Diagnose why the Ansible fleet containers will not boot
 	$(call banner,fleet: why systemd is not staying up)
 	@./hack/fleet-check.sh
 
+.PHONY: inventory-check
+inventory-check: ## Prove the dynamic inventory resolves to the fleet, not localhost
+	$(call banner,ansible inventory)
+	@./hack/inventory-check.sh
+
 .PHONY: ansible
 ansible: ## Configure the server fleet with Ansible
 	$(call banner,ansible: configuring the fleet)
@@ -143,6 +148,10 @@ ansible: ## Configure the server fleet with Ansible
 		fi; \
 		echo "    $$running fleet host(s) up"
 	@cd ansible && ansible-galaxy collection install -r requirements.yml
+	@# A broken inventory is a WARNING in Ansible, not an error: it falls back
+	@# to the implicit localhost and runs anyway. Turn that into an exit code
+	@# before a playbook configures the wrong machine.
+	@./hack/inventory-check.sh
 	@cd ansible && ansible-playbook site.yml
 
 .PHONY: ansible-idempotence
