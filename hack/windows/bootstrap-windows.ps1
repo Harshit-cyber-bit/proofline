@@ -129,22 +129,88 @@ Write-Ok "WSL2 is the default version"
 
 # ------------------------------------------------------------------ distro
 
-Write-Step "Installing $Distro"
+Write-Step "Installing a Linux distribution"
 
 # `wsl --list` emits UTF-16, which mangles a naive -match. Normalise first.
-$installed = (wsl --list --quiet) -replace "`0", "" -split "`r?`n" |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -ne "" }
+function Get-WslDistros {
+    $raw = wsl --list --quiet 2>$null
+    if (-not $raw) { return @() }
+    return ($raw -replace "`0", "" -split "`r?`n" |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne "" })
+}
+
+$installed = Get-WslDistros
+
+if ($installed.Count -gt 0) {
+    Write-Ok "already installed: $($installed -join ', ')"
+} else {
+    Write-Host "    no distributions installed yet"
+}
 
 if ($installed -contains $Distro) {
-    Write-Ok "$Distro already installed"
+    Write-Ok "$Distro is present"
 } else {
-    Write-Host "    this downloads ~500 MB and takes a few minutes ..."
-    wsl --install -d $Distro --no-launch | Out-Host
+    # The exact catalogue name varies by Windows build -- on some it is
+    # Ubuntu-24.04, on others just Ubuntu. Ask rather than assume, because
+    # guessing produces WSL_E_DISTRO_NOT_FOUND, which reads like WSL is broken
+    # when in fact only the name is wrong.
+    Write-Host "    checking the online catalogue ..."
+    $available = @()
+    try {
+        $catalogue = (wsl --list --online 2>$null) -replace "`0", "" -split "`r?`n"
+        foreach ($line in $catalogue) {
+            $trimmed = $line.Trim()
+            if ($trimmed -match '^(Ubuntu[\w\.\-]*)\s') {
+                $available += $Matches[1]
+            }
+        }
+    } catch {
+        Write-Warn "could not read the catalogue: $($_.Exception.Message)"
+    }
+
+    if ($available.Count -gt 0) {
+        Write-Ok "catalogue offers: $($available -join ', ')"
+    }
+
+    $target = $Distro
+    if ($available.Count -gt 0 -and $available -notcontains $Distro) {
+        # Prefer the newest Ubuntu on offer, else plain Ubuntu.
+        $preferred = $available | Where-Object { $_ -match '^Ubuntu-\d' } |
+            Sort-Object -Descending | Select-Object -First 1
+        if (-not $preferred) { $preferred = "Ubuntu" }
+        Write-Warn "$Distro is not offered on this build; using $preferred instead"
+        $target = $preferred
+    }
+
+    Write-Host "    installing $target -- ~500 MB, a few minutes ..."
+    wsl --install -d $target --no-launch | Out-Host
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "wsl --install failed (exit $LASTEXITCODE)." -ForegroundColor Red
+        Write-Host "Most common causes, in order:" -ForegroundColor Yellow
+        Write-Host "  1. A reboot is still pending from the feature enablement above."
+        Write-Host "  2. Hardware virtualisation is off in the BIOS."
+        Write-Host "  3. The Microsoft Store is blocked; try: wsl --install -d $target --web-download"
+        Write-Host ""
+        Write-Host "Run 'wsl --list --online' and send me the output if none of those apply."
+        exit 1
+    }
+
+    $Distro = $target
     Write-Ok "$Distro installed"
     Write-Host ""
-    Write-Host "First launch will ask you to create a UNIX username and password." -ForegroundColor Yellow
-    Write-Host "Pick anything you will remember -- you need the password for sudo."
+    Write-Host "IMPORTANT: launch it once before continuing." -ForegroundColor Yellow
+    Write-Host "  wsl -d $Distro"
+    Write-Host "It will ask you to create a UNIX username and password. You need"
+    Write-Host "that password for sudo. Then exit, and re-run this script."
+    Write-Host ""
+
+    # /etc/wsl.conf cannot be written until the distro has a root filesystem,
+    # which only exists after first launch. Stopping here is clearer than
+    # failing three steps later.
+    exit 0
 }
 
 # ------------------------------------------------------------------ config
