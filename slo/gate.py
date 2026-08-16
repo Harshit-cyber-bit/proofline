@@ -201,8 +201,23 @@ def ratio_query(sel: str, window: str) -> str:
 def count_query(sel: str, window: str) -> str:
     """Requests in the window, for the traffic floor only.
 
-    Extrapolated, so treat it as an order of magnitude rather than a count.
-    It decides "was anyone using this", not "how healthy is it".
+    Extrapolated, so treat it as an order of magnitude rather than a count. It
+    decides "was anyone using this", not "how healthy is it".
+
+    How far off it is, measured rather than assumed: on a 10m window during a
+    run with two rollouts in it, this reported 3,169 requests to /readyz where
+    the probe schedule allows at most ~600, and 463 scrapes of /metrics where
+    the scrape interval allows ~80. Both inflated by the same factor of five to
+    six. `increase()` extrapolates each series across the full window, and a
+    rollout replaces every pod, so the window fills with short-lived series each
+    of which gets stretched to ten minutes.
+
+    This is the argument for computing the ratio inside Prometheus (see
+    ratio_query): the numerator and denominator inflate together and the ratio
+    survives, while any absolute count taken from the same data does not. The
+    evidence that it works is that the gate's ratio agreed with the prober --
+    22.36% against the prober's 21.4% over the same two minutes -- while these
+    counts were off by 5x.
     """
     return f"sum(increase(http_requests_total{{{sel}}}[{window}]))"
 
