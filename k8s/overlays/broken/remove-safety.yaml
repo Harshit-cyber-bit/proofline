@@ -22,7 +22,15 @@ spec:
       #   one dropped request in eighty. Enough to fail the build (zero means
       #   zero) and too subtle to see in a demo.
       maxUnavailable: 100%
-      maxSurge: 1
+      # maxSurge: 0 is what turns this from "a few dropped requests" into a
+      # real outage. With any surge allowed, the controller prefers to add a new
+      # pod before removing old ones, so even maxUnavailable: 100% only dropped
+      # 2 requests in 97 -- a genuine failure, but an invisible one. Zero surge
+      # forces terminate-then-create: every pod dies, and nothing serves until a
+      # replacement passes its (60-second) readiness check.
+      #
+      # People really do set this, usually to fit inside a tight ResourceQuota.
+      maxSurge: 0
   # No soak before a pod counts as available.
   minReadySeconds: 0
   template:

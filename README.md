@@ -157,6 +157,14 @@ FAIL deployment.yaml Deployment: spec.template.spec.containers.0:
 
 ## Details worth stealing
 
+**An outage does not always look like an error.** When a Service has no ready
+endpoints, kube-proxy has nowhere to send the packet, so the client's TCP SYN is
+retried until a pod appears — and the request eventually *succeeds*, one or two
+seconds later. A rollout that takes every pod down at once therefore shows up as
+a latency cliff, not as dropped connections: the unsafe overlay here drops only
+2 requests in 93 but pushes p99 from 15ms to 2067ms. The prober fails on both,
+because an error-only check would have called that a near miss.
+
 **Measure through the path your users take.** The first working version of the
 prober reached the service with `kubectl port-forward svc/proofline`. That
 resolves the Service to *one* backing pod and tunnels to it — so a correct

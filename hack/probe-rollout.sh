@@ -15,7 +15,18 @@
 # The lesson generalises: measure through the same path your users take, or you
 # are measuring your test harness.
 #
+# A latency ceiling matters as much as the error count, and for a reason that is
+# not obvious: when a Service has no ready endpoints, requests are not always
+# refused. The client's TCP SYN is retried until an endpoint appears, so the
+# request eventually succeeds -- after one or two seconds. A rollout that takes
+# every pod down therefore shows up as a latency cliff rather than as dropped
+# connections, and an error-only check calls it a near-miss.
+#
+# MAX_P99_MS makes that count. Set it above normal p99 and below "obviously
+# broken"; the prober fails the run if the ceiling is breached.
+#
 # Usage: probe-rollout.sh <kube-context> <namespace> <node-port> <report> [duration]
+# Env:   MAX_P99_MS (default 1000), ROLLOUT_RESTART (default 1)
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -28,6 +39,7 @@ DURATION="${5:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_URL="http://127.0.0.1:${PORT}"
+MAX_P99_MS="${MAX_P99_MS:-1000}"
 
 mkdir -p "$(dirname "${REPORT}")"
 
@@ -55,6 +67,7 @@ if [ -n "${DURATION}" ]; then
     --url "${BASE_URL}/api/work" \
     --duration "${DURATION}" \
     --interval 0.1 \
+    --max-latency-p99 "${MAX_P99_MS}" \
     --report "${REPORT}"
   exit $?
 fi
@@ -71,5 +84,6 @@ fi
 python3 "${REPO_ROOT}/prober/prober.py" \
   --url "${BASE_URL}/api/work" \
   --interval 0.2 \
+  --max-latency-p99 "${MAX_P99_MS}" \
   --until-command "/bin/sh -c '${TRIGGER}kubectl --context ${CONTEXT} rollout status deployment/proofline -n ${NAMESPACE} --timeout=300s'" \
   --report "${REPORT}"

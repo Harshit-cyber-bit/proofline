@@ -199,8 +199,11 @@ Afterwards it restores the safe overlay. If that stalls, it prints pod status,
 events and the likely cause rather than just timing out; `make restore` re-runs
 just that step.
 
-**Expect FAIL**, with consecutive `connection_error` failures and an estimated
-downtime in seconds.
+**Expect FAIL** — and look at *why*. Most of the damage shows up as latency
+rather than errors: p99 jumps from ~15ms to ~2000ms, because with no ready
+endpoints kube-proxy holds the connection until a pod appears instead of
+refusing it. The prober fails on the latency ceiling (`PROBE_MAX_P99`, default
+1000ms) as well as on dropped requests.
 
 Run them back to back in one terminal. Green then red, about fifteen seconds of
 video, and that is the LinkedIn post.

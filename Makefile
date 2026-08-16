@@ -28,6 +28,13 @@ NODEPORT_staging := 30081
 NODEPORT_prod    := 30082
 PROBE_PORT        = $(NODEPORT_$(ENV))
 
+# Latency ceiling for a rollout, in milliseconds. A healthy rollout here sits
+# around 15ms at p99; a rollout that takes every pod down at once holds requests
+# for one to two seconds before they succeed, because kube-proxy has no endpoint
+# to send them to and the client keeps retrying the SYN. Without this ceiling
+# that outage is invisible -- the requests are slow, not failed.
+PROBE_MAX_P99 ?= 1000
+
 KUBECTL := kubectl --context $(KUBE_CONTEXT)
 NS       = proofline-$(ENV)
 
@@ -152,7 +159,7 @@ prove: ## Deploy to ENV and prove the rollout dropped no requests
 	@mkdir -p reports/$(ENV)
 	@cd k8s/overlays/$(ENV) && kustomize edit set image $(IMAGE_NAME)=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/$(ENV)
-	@./hack/probe-rollout.sh $(KUBE_CONTEXT) $(NS) $(PROBE_PORT) reports/$(ENV)/probe.json
+	@MAX_P99_MS=$(PROBE_MAX_P99) ./hack/probe-rollout.sh $(KUBE_CONTEXT) $(NS) $(PROBE_PORT) reports/$(ENV)/probe.json
 
 .PHONY: break
 break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
@@ -163,7 +170,7 @@ break: ## Deploy WITHOUT the zero-downtime settings; the prober should fail
 	@mkdir -p reports/broken
 	@cd k8s/overlays/broken && kustomize edit set image $(IMAGE_NAME)=$(IMAGE):$(TAG)
 	@$(KUBECTL) apply -k k8s/overlays/broken
-	@-./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) reports/broken/probe.json
+	@-MAX_P99_MS=$(PROBE_MAX_P99) ./hack/probe-rollout.sh $(KUBE_CONTEXT) proofline-dev $(NODEPORT_dev) reports/broken/probe.json
 	@echo ""
 	@$(MAKE) --no-print-directory restore
 
