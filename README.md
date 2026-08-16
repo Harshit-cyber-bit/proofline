@@ -1,3 +1,6 @@
+![ci](https://github.com/Harshit-cyber-bit/proofline/actions/workflows/ci.yaml/badge.svg)
+![Uploading proofline.gif…]()
+
 # proofline
 
 **A delivery pipeline that proves its own claims.**
